@@ -1,0 +1,11 @@
+# dsh-paste-to-path: keep short text native; turn long text and files into managed path attachments.
+- insert:
+    - id: paste-to-path
+      name: dsh-paste-to-path
+      config:
+        # Short text stays native. Text at or above this length becomes a .txt attachment.
+        longTextAsAttachment: true
+        longTextThreshold: 8000
+        # Store up to 25 MiB per file; edit up to 1 MiB of text inside the dock card.
+        maxBytes: 26214400
+        editableTextMaxBytes: 1048576
