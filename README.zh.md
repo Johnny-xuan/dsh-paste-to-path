@@ -36,7 +36,7 @@ Agent
 
 ---
 
-## Demo
+## 路径流程概览
 
 <p align="center">
   <img src="./assets/dsh-paste-to-path-poster-4k.png" alt="dsh-paste-to-path 工作方式" width="100%">

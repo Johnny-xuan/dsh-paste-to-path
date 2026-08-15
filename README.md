@@ -36,7 +36,7 @@ The plugin owns **attachment intake, management, and path delivery**. Your Agent
 
 ---
 
-## Demo
+## Path flow at a glance
 
 <p align="center">
   <img src="./assets/dsh-paste-to-path-poster-4k.png" alt="How dsh-paste-to-path works" width="100%">
