@@ -4,6 +4,13 @@
 
 English | [简体中文](./README.zh.md)
 
+## What This Version Fixes
+
+- Long-text conversion uses configurable `longTextThreshold`; `8000` is only the profile starting value.
+- Native image handling accepts any editable suffix list, so the plugin does not compete with DSH's image UI or model input.
+- Settings are a Chinese, collapsible card that follows DSH/Web UI's native plugin-card contract, without modifying DSH core.
+- The plugin can be developed, packed, and installed locally as a `.tgz` package.
+
 `dsh-paste-to-path` adds a general-purpose attachment Dock to the DSH Web composer.
 
 Paste or drop images, PDFs, Word and Excel documents, archives, code, logs, and other files, then review and manage them together before sending.

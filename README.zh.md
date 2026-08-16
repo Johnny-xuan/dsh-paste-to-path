@@ -4,6 +4,13 @@
 
 [English](./README.md) | 简体中文
 
+## 本版本解决的问题
+
+- 长文本阈值使用可配置的 `longTextThreshold`；`8000` 只是 profile 初始值，不再写死。
+- 原生图片处理改为可编辑的任意后缀列表，避免插件和 DSH 原生图片 UI、模型图片输入冲突。
+- 设置卡使用中文和 DSH/Web UI 原生折叠卡结构，不修改 DSH 核心源码。
+- 支持打包成 `.tgz` 后在本地 profile 安装，便于开发和自用。
+
 `dsh-paste-to-path` 给 DSH Web composer 增加了一个通用附件 Dock。
 
 你可以直接拖入或粘贴图片、PDF、Word、Excel、压缩包、代码、日志以及其他文件，在发送前统一查看和管理它们。
