@@ -7,15 +7,18 @@ import { randomBytes, randomUUID } from 'node:crypto'
 import { mkdir, readFile, realpath, stat, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { basename, extname, isAbsolute, join, resolve } from 'node:path'
+import z from '@deepseek-ai/schemastery'
 
 export const name = 'dsh-paste-to-path'
-export const inject = ['webServer']
+export const inject = ['webServer', 'settings']
 
-const DEFAULTS = Object.freeze({
-  longTextAsAttachment: true,
-  longTextThreshold: 8000,
-  maxBytes: 25 * 1024 * 1024,
-  editableTextMaxBytes: 1024 * 1024,
+export const Config = z.object({
+  longTextAsAttachment: z.boolean().required(),
+  longTextThreshold: z.natural().min(1).required(),
+  nativeImageExtensions: z.array(z.string()).required(),
+  maxBytes: z.natural().min(1).required(),
+  editableTextMaxBytes: z.natural().min(1).required(),
+  dir: z.string(),
 })
 
 const CATEGORY_RULES = [
@@ -46,18 +49,20 @@ class RequestError extends Error {
   }
 }
 
-function positiveInteger(value, fallback) {
-  return Number.isSafeInteger(value) && value > 0 ? value : fallback
+export function resolveConfig(config = {}) {
+  const resolved = Config(config)
+  return {
+    ...resolved,
+    nativeImageExtensions: normalizeImageExtensions(resolved.nativeImageExtensions),
+  }
 }
 
-export function resolveConfig(config = {}) {
-  return {
-    longTextAsAttachment: config.longTextAsAttachment !== false,
-    longTextThreshold: positiveInteger(config.longTextThreshold, DEFAULTS.longTextThreshold),
-    maxBytes: positiveInteger(config.maxBytes, DEFAULTS.maxBytes),
-    editableTextMaxBytes: positiveInteger(config.editableTextMaxBytes, DEFAULTS.editableTextMaxBytes),
-    dir: config.dir,
-  }
+function normalizeImageExtension(value) {
+  return String(value ?? '').trim().toLowerCase().replace(/^\.+/, '')
+}
+
+function normalizeImageExtensions(values) {
+  return [...new Set(values.map(normalizeImageExtension).filter(Boolean))]
 }
 
 function firstHeader(value) {
@@ -175,26 +180,150 @@ function attachmentFor(registry, req) {
   return attachment
 }
 
-export function apply(ctx, rawConfig = {}) {
-  const config = resolveConfig(rawConfig)
-  const fallbackDir = config.dir ?? join(process.env.DSH_HOME ?? join(homedir(), '.dsh'), 'tmp-paste')
-  const registry = new Map()
+const SETTINGS_NAMESPACE = 'paste-to-path'
+const SETTINGS_MAX_BODY_BYTES = 64 * 1024
 
-  const routes = [
+function isLoopbackRequest(req) {
+  const address = req.socket?.remoteAddress
+  if (address !== '127.0.0.1' && address !== '::1' && address !== '::ffff:127.0.0.1') return false
+  const host = req.headers?.host
+  if (typeof host !== 'string') return false
+  let hostUrl
+  try {
+    hostUrl = new URL(`http://${host}`)
+  } catch {
+    return false
+  }
+  if (!['127.0.0.1', 'localhost', '[::1]'].includes(hostUrl.hostname)) return false
+  if (req.headers['sec-fetch-site'] === 'cross-site') return false
+  const origin = req.headers.origin
+  if (origin === undefined) return true
+  try {
+    return new URL(origin).host === hostUrl.host
+  } catch {
+    return false
+  }
+}
+
+function settingsView(descriptor) {
+  return {
+    ns: String(descriptor.ns),
+    schema: descriptor.schema,
+    value: descriptor.value,
+    ...(descriptor.base === undefined ? {} : { base: descriptor.base }),
+    ...(descriptor.user === undefined ? {} : { user: descriptor.user }),
+    ...(descriptor.secrets === undefined ? {} : {
+      secrets: descriptor.secrets.map((secret) => ({ path: [...secret.path], set: secret.set })),
+    }),
+    revision: descriptor.revision,
+  }
+}
+
+function settingsFailure(error) {
+  const message = String(error?.message ?? error)
+  return {
+    ok: false,
+    code: error?.code === 'SETTINGS_CONFLICT' || error?.name === 'SettingsConflictError'
+      ? 'settings-conflict'
+      : 'settings-rejected',
+    message,
+  }
+}
+
+async function readSettingsBody(req) {
+  const body = await readBody(req, SETTINGS_MAX_BODY_BYTES, true)
+  if (body.length === 0) return {}
+  try {
+    return JSON.parse(body.toString('utf8'))
+  } catch {
+    throw new RequestError(400, 'invalid JSON body')
+  }
+}
+
+function settingsDescriptor(settings) {
+  return settings
+    .describe({ redactSecrets: true })
+    .find((descriptor) => String(descriptor.ns) === SETTINGS_NAMESPACE)
+}
+
+function settingsRoutes(settings) {
+  const guard = (req, res) => {
+    if (!isLoopbackRequest(req)) {
+      json(res, 403, { error: 'loopback requests only' })
+      return false
+    }
+    if (req.method !== 'POST') {
+      json(res, 405, { error: `method not allowed: ${req.method ?? ''}` }, { allow: 'POST' })
+      return false
+    }
+    return true
+  }
+
+  return [
     {
-      name: 'paste-to-path-config',
+      name: 'paste-to-path-settings-describe',
       kind: 'exact',
-      path: '/paste-to-path/config',
+      path: '/paste-to-path/settings/describe',
       handler: async (req, res) => {
-        if (req.method !== 'GET') return json(res, 405, { error: 'method not allowed' }, { allow: 'GET' })
-        return json(res, 200, {
-          longTextAsAttachment: config.longTextAsAttachment,
-          longTextThreshold: config.longTextThreshold,
-          maxBytes: config.maxBytes,
-          editableTextMaxBytes: config.editableTextMaxBytes,
+        if (!guard(req, res)) return
+        const descriptor = settingsDescriptor(settings)
+        if (descriptor === undefined) {
+          json(res, 200, { ok: false, code: 'settings-not-registered', message: 'paste-to-path settings are not registered' })
+          return
+        }
+        json(res, 200, {
+          ok: true,
+          value: {
+            namespaces: [settingsView(descriptor)],
+            writable: settings.writable !== false,
+          },
         })
       },
     },
+    {
+      name: 'paste-to-path-settings-mutate',
+      kind: 'exact',
+      path: '/paste-to-path/settings/mutate',
+      handler: async (req, res) => {
+        if (!guard(req, res)) return
+        try {
+          const body = await readSettingsBody(req)
+          if (body === null || typeof body !== 'object' || body.ns !== SETTINGS_NAMESPACE || !Array.isArray(body.ops)) {
+            throw new RequestError(400, 'malformed settings request')
+          }
+          const expectedRevision = typeof body.expectedRevision === 'number' ? body.expectedRevision : undefined
+          await settings.mutate(SETTINGS_NAMESPACE, body.ops, expectedRevision)
+          const descriptor = settingsDescriptor(settings)
+          if (descriptor === undefined) throw new Error('paste-to-path settings were disposed after the update')
+          json(res, 200, { ok: true, value: settingsView(descriptor) })
+        } catch (error) {
+          if (error instanceof RequestError) {
+            json(res, error.status, { ok: false, code: 'settings-rejected', message: error.message })
+            return
+          }
+          json(res, 200, settingsFailure(error))
+        }
+      },
+    },
+  ]
+}
+
+export function apply(ctx, rawConfig = {}) {
+  const entryConfig = resolveConfig(rawConfig)
+  const settings = ctx.settings.register('paste-to-path', Config, {
+    base: entryConfig,
+  })
+  let config = settings.get()
+  settings.watch((next) => {
+    config = {
+      ...next,
+      nativeImageExtensions: normalizeImageExtensions(next.nativeImageExtensions),
+    }
+  })
+  const defaultFallbackDir = join(process.env.DSH_HOME ?? join(homedir(), '.dsh'), 'tmp-paste')
+  const registry = new Map()
+
+  const routes = [
     {
       name: 'paste-to-path-content',
       kind: 'exact',
@@ -234,7 +363,7 @@ export function apply(ctx, rawConfig = {}) {
           const mediaType = normalizedMediaType(firstHeader(req.headers['content-type']))
           const buffer = await readBody(req, config.maxBytes)
           const category = categoryOf(fileName, mediaType)
-          const root = await storageRoot(workspace, fallbackDir)
+          const root = await storageRoot(workspace, config.dir ?? defaultFallbackDir)
           const displayName = safeFileName(fileName, mediaType)
           const path = await writeUnique(join(root, category), displayName, buffer)
           const id = randomUUID()
@@ -250,6 +379,6 @@ export function apply(ctx, rawConfig = {}) {
     },
   ]
 
-  for (const route of routes) ctx.webServer.register(route)
+  for (const route of [...routes, ...settingsRoutes(ctx.settings)]) ctx.webServer.register(route)
   ctx.effect?.(() => () => registry.clear(), 'dsh-paste-to-path: attachment registry')
 }

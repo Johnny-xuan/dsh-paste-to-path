@@ -16,6 +16,8 @@ Paste or drop images, PDFs, Word and Excel documents, archives, code, logs, and 
 
 The DSH `0.1.0-rc.6` Web composer natively accepts PNG, JPEG, WebP, and GIF. PDFs, Office documents, archives, and other formats do not currently have the same unified attachment entry point. Even an image may fail when the selected model does not support image input or the active adapter is text-only.
 
+PNG, JPG/JPEG, WebP, and GIF are delegated to DSH's native image flow by default. Edit the comma-separated suffix list in **Settings → Plugins → Plugin configuration → Paste to Path** when you want to add or remove formats.
+
 `dsh-paste-to-path` does not extend the model's native content types. It takes a simpler route:
 
 ```text
@@ -76,7 +78,15 @@ Normal text still pastes normally.
 
 When pasted content crosses the configured threshold, the plugin can save it as a `.txt` file instead of putting tens of thousands of characters directly into the composer.
 
-The default threshold is `8000` characters.
+The initial profile threshold is `8000` characters. Change it live in **Settings → Plugins → Plugin configuration → Paste to Path**.
+
+---
+
+### Keep supported images in DSH's native flow
+
+The Paste to Path settings card has an editable comma-separated suffix list under **Let DSH handle these image formats natively**. Enter any suffix, such as `png, jpg, webp, gif, svg`, to keep matching files in DSH's native image flow.
+
+When a format is selected, the plugin does not cancel its paste or drop event. DSH keeps control of its native image preview UI and model image input. Clear a format to save it as a path-backed attachment in the Dock.
 
 ---
 
@@ -105,7 +115,7 @@ dsh plugin --profile web add dsh-paste-to-path
 Before the npm release, you can also install directly from GitHub:
 
 ```bash
-dsh plugin --profile web add github:Johnny-xuan/dsh-paste-to-path
+dsh plugin --profile web add github:CCSSNE/dsh-paste-to-path
 ```
 
 Restart DSH after installation:
@@ -251,6 +261,12 @@ Default configuration is provided by `cordis.patch.yml`:
       config:
         longTextAsAttachment: true
         longTextThreshold: 8000
+        nativeImageExtensions:
+          - png
+          - jpg
+          - jpeg
+          - webp
+          - gif
         maxBytes: 26214400
         editableTextMaxBytes: 1048576
 ```
@@ -258,11 +274,12 @@ Default configuration is provided by `cordis.patch.yml`:
 | Option | Default | Description |
 | --- | --- | --- |
 | `longTextAsAttachment` | `true` | Save long pasted text as a `.txt` attachment |
-| `longTextThreshold` | `8000` | Character threshold for long-text conversion |
+| `longTextThreshold` | `8000` | Initial character threshold for long-text conversion; editable from the settings card |
+| `nativeImageExtensions` | PNG, JPG, JPEG, WebP, GIF | Comma-separated suffixes delegated to DSH's native image flow; edit the list to route any other suffix |
 | `maxBytes` | 25 MiB | Maximum size of one attachment |
 | `editableTextMaxBytes` | 1 MiB | Maximum text-file size editable in the Dock |
 
-Override the `paste-to-path` entry in your profile's `cordis.patch.yml` to change these values.
+Use **Settings → Plugins → Plugin configuration → Paste to Path** for normal changes. The profile entry is the initial base value; resetting a setting in the card returns to that base value.
 
 ---
 

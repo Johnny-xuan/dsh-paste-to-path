@@ -16,6 +16,8 @@
 
 DSH `0.1.0-rc.6` 的 Web composer 原生接收 PNG、JPEG、WebP 和 GIF。PDF、Office 文档、压缩包以及其他格式目前没有对应的统一附件入口；即使是图片，在不支持图像输入的模型或 text-only adapter 下，也可能无法直接发送。
 
+默认情况下，PNG、JPG/JPEG、WebP 和 GIF 会交给 DSH 原生图片链路处理。可以在 **设置 → 插件 → 插件配置 → Paste to Path** 的后缀输入框中增删任意后缀，例如 `png, jpg, webp, gif, svg`。
+
 `dsh-paste-to-path` 不去扩展模型原生的 content 类型，而是走另一条更简单的路径：
 
 ```text
@@ -76,7 +78,15 @@ Agent
 
 当粘贴内容超过设定阈值时，插件可以自动把它保存为 `.txt` 文件，而不是把几万字直接塞进输入框。
 
-默认阈值是 `8000` 个字符。
+初始 profile 阈值是 `8000` 个字符；可在 **设置 → 插件 → 插件配置 → Paste to Path** 中实时修改。
+
+---
+
+### 保留 DSH 原生图片链路
+
+Paste to Path 设置卡提供可编辑的「交给 DSH 原生处理的图片后缀」列表，用逗号或空格分隔；选中的后缀会绕过插件，保留 DSH 原生图片预览和模型图片输入。
+
+勾选某个格式后，插件不会取消该格式的粘贴或拖放事件，DSH 可以继续使用自己的图片预览 UI 和模型图片输入。取消勾选后，该格式会保存为 Dock 中的路径附件。
 
 ---
 
@@ -105,7 +115,7 @@ dsh plugin --profile web add dsh-paste-to-path
 npm 正式发布前，也可以直接从 GitHub 安装：
 
 ```bash
-dsh plugin --profile web add github:Johnny-xuan/dsh-paste-to-path
+dsh plugin --profile web add github:CCSSNE/dsh-paste-to-path
 ```
 
 安装完成后重新启动：
@@ -251,6 +261,12 @@ DSH 原生附件链路里，文件格式和模型能力通常绑得比较紧。
       config:
         longTextAsAttachment: true
         longTextThreshold: 8000
+        nativeImageExtensions:
+          - png
+          - jpg
+          - jpeg
+          - webp
+          - gif
         maxBytes: 26214400
         editableTextMaxBytes: 1048576
 ```
@@ -258,11 +274,12 @@ DSH 原生附件链路里，文件格式和模型能力通常绑得比较紧。
 | 配置项                    | 默认值    | 说明                    |
 | ---------------------- | ------ | --------------------- |
 | `longTextAsAttachment` | `true` | 是否把长文本保存为 `.txt` 附件   |
-| `longTextThreshold`    | `8000` | 长文本触发阈值，单位为字符         |
+| `longTextThreshold`    | `8000` | 长文本初始触发阈值，单位为字符；可在设置卡中修改 |
+| `nativeImageExtensions` | PNG、JPG、JPEG、WebP、GIF | 交给 DSH 原生处理的后缀列表；可填写任意后缀 |
 | `maxBytes`             | 25 MiB | 单个附件最大大小              |
 | `editableTextMaxBytes` | 1 MiB  | Dock 中允许直接编辑的最大文本文件大小 |
 
-需要修改时，在 profile 的 `cordis.patch.yml` 中覆盖 `paste-to-path` 对应配置即可。
+常规修改请使用 **设置 → 插件 → 插件配置 → Paste to Path**。profile 中的配置是初始基础值；在设置卡中重置某项会回到该基础值。
 
 ---
 

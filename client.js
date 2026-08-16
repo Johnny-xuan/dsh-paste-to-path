@@ -19,11 +19,133 @@ window.__ModuleLoader__.load({
     var listeners = new Map()
     var previewUrls = new Set()
     var EMPTY_ITEMS = Object.freeze([])
-    var config = {
-      longTextAsAttachment: true,
-      longTextThreshold: 8000,
-      maxBytes: 25 * 1024 * 1024,
-      editableTextMaxBytes: 1024 * 1024,
+    var config = null
+    var configScope = null
+    var configUnavailableLogged = false
+    var NATIVE_IMAGE_EXTENSION_BY_MEDIA_TYPE = Object.freeze({
+      'image/png': 'png',
+      'image/jpeg': 'jpeg',
+      'image/jpg': 'jpg',
+      'image/webp': 'webp',
+      'image/gif': 'gif',
+    })
+    var SETTINGS_FIELDS = Object.freeze([
+      'longTextAsAttachment',
+      'longTextThreshold',
+      'nativeImageExtensions',
+      'maxBytes',
+      'editableTextMaxBytes',
+    ])
+    var SETTINGS_BRIDGE = '/paste-to-path/settings'
+
+    function createSettingsSnapshot(initial) {
+      var value = initial
+      var listeners = new Set()
+      return {
+        get: () => value,
+        subscribe(listener) {
+          listeners.add(listener)
+          return () => listeners.delete(listener)
+        },
+        set(next) {
+          value = next
+          for (var listener of listeners) listener()
+        },
+      }
+    }
+
+    function createBridgeScope(namespace) {
+      var snapshot = createSettingsSnapshot({
+        status: 'loading',
+        value: undefined,
+        base: undefined,
+        user: undefined,
+        revision: undefined,
+        writable: false,
+      })
+      var tail = Promise.resolve()
+      var disposed = false
+
+      function enqueue(operation) {
+        if (disposed) return Promise.resolve()
+        var task = tail.then(() => disposed ? undefined : operation())
+        tail = task.catch(() => undefined)
+        return task
+      }
+
+      async function post(path, body) {
+        var response = await fetch(`${SETTINGS_BRIDGE}${path}`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(body),
+        })
+        if (!response.ok) throw new Error(`settings bridge HTTP ${response.status}`)
+        var result = await response.json()
+        if (!result || typeof result.ok !== 'boolean') throw new Error('malformed settings bridge response')
+        return result
+      }
+
+      function accept(view, writable) {
+        var current = snapshot.get()
+        snapshot.set({
+          ...current,
+          status: 'ready',
+          value: view.value,
+          base: view.base,
+          user: view.user,
+          revision: view.revision,
+          writable: writable === undefined ? current.writable : writable,
+        })
+      }
+
+      async function read() {
+        try {
+          var result = await post('/describe', {})
+          var view = result.ok
+            ? result.value?.namespaces?.find((entry) => entry.ns === namespace)
+            : undefined
+          if (view === undefined) {
+            snapshot.set({ ...snapshot.get(), status: 'unavailable', writable: result.ok ? result.value.writable : false })
+            return
+          }
+          accept(view, result.value.writable)
+        } catch {
+          snapshot.set({ ...snapshot.get(), status: 'unavailable' })
+        }
+      }
+
+      async function write(op) {
+        var current = snapshot.get()
+        var result
+        try {
+          result = await post('/mutate', {
+            ns: namespace,
+            ops: [op],
+            ...(current.revision === undefined ? {} : { expectedRevision: current.revision }),
+          })
+        } catch (error) {
+          await read()
+          throw error
+        }
+        if (!result.ok) {
+          await read()
+          throw new Error(result.message || 'settings update rejected')
+        }
+        accept(result.value, undefined)
+      }
+
+      var scope = {
+        getSnapshot: () => snapshot.get(),
+        subscribe: (listener) => snapshot.subscribe(listener),
+        load: () => enqueue(read),
+        set: (field, value) => enqueue(() => write({ op: 'set', path: [field], value })),
+        unset: (field) => enqueue(() => write({ op: 'unset', path: [field] })),
+        dispose() {
+          disposed = true
+        },
+      }
+      scope.load()
+      return scope
     }
 
     var css = `
@@ -46,6 +168,30 @@ window.__ModuleLoader__.load({
       .dsh-p2p-editor textarea:focus{border-color:var(--dsw-alias-state-business-primary)}
       .dsh-p2p-editor-row{display:flex;justify-content:flex-end;gap:6px}
       .dsh-p2p-error{color:var(--dsw-alias-state-error-primary);font-size:12px}
+      .dsh-p2p-settings-card{list-style:none;border:1px solid var(--dsw-alias-border-l2);border-radius:12px;background:var(--dsw-alias-bg-layer-3);transition:border-color .16s,background .16s}
+      .dsh-p2p-settings-card:hover{border-color:var(--dsw-alias-label-dimmed)}
+      .dsh-p2p-settings-card-open{background:var(--dsw-alias-bg-layer-2);border-color:var(--dsw-alias-label-dimmed)}
+      .dsh-p2p-settings-header{appearance:none;width:100%;color:inherit;font:inherit;text-align:left;cursor:pointer;background:transparent;border:0;border-radius:12px;display:flex;align-items:center;gap:12px;padding:14px 16px}
+      .dsh-p2p-settings-header:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:-2px}
+      .dsh-p2p-settings-head-text{display:flex;flex-direction:column;flex:1;gap:4px;min-width:0}
+      .dsh-p2p-settings-title{color:var(--dsw-alias-label-primary);font-size:15px;font-weight:600;line-height:1.4}
+      .dsh-p2p-settings-description{color:var(--dsw-alias-label-tertiary);font-size:13px;line-height:1.5}
+      .dsh-p2p-settings-chevron{flex:none;color:var(--dsw-alias-label-tertiary);transition:transform .16s}
+      .dsh-p2p-settings-chevron-open{transform:rotate(180deg)}
+      .dsh-p2p-settings-body{border-top:1px solid var(--dsw-alias-border-l2);margin:0 16px;padding:12px 0 8px}
+      .dsh-p2p-settings-fields{display:grid;gap:12px}
+      .dsh-p2p-settings-field{display:grid;gap:4px;font-size:13px}
+      .dsh-p2p-settings-field input[type=number],.dsh-p2p-settings-field input[type=text]{box-sizing:border-box;width:100%;max-width:420px;border:1px solid var(--dsw-alias-border-l2);border-radius:7px;background:var(--dsw-specific-input-major);color:var(--dsw-alias-label-primary);padding:5px 8px;font:inherit}
+      .dsh-p2p-settings-field input:disabled{opacity:.55;cursor:not-allowed}
+      .dsh-p2p-settings-hint{color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:17px}
+      .dsh-p2p-settings-check{display:flex;align-items:center;gap:7px;cursor:pointer}
+      .dsh-p2p-settings-actions{display:flex;align-items:center;justify-content:flex-end;gap:8px;margin-top:14px;padding-top:12px;border-top:1px solid var(--dsw-alias-border-l2)}
+      .dsh-p2p-settings-actions button{appearance:none;border:1px solid transparent;border-radius:8px;padding:5px 14px;font:inherit;font-size:13px;line-height:1.5;cursor:pointer}
+      .dsh-p2p-settings-discard{border-color:var(--dsw-alias-border-l2)!important;background:transparent;color:var(--dsw-alias-label-secondary)}
+      .dsh-p2p-settings-save{background:var(--dsw-alias-label-primary);color:var(--dsw-alias-bg-layer-3)}
+      .dsh-p2p-settings-actions button:disabled{opacity:.4;cursor:default}
+      .dsh-p2p-settings-status{color:var(--dsw-alias-label-tertiary);font-size:12px}
+      .dsh-p2p-settings-pending{flex:none;border-radius:999px;padding:1px 8px;font-size:11px;line-height:17px;font-weight:500;white-space:nowrap;background:var(--dsw-alias-bg-module-platform);color:var(--dsw-alias-label-secondary)}
     `
 
     function sessionItems(sessionId) {
@@ -92,6 +238,41 @@ window.__ModuleLoader__.load({
     function filesOfDrop(event) {
       var files = event.dataTransfer?.files
       return files ? Array.from(files).filter((file) => file && file.size > 0) : []
+    }
+
+    function nativeImageExtensions(file) {
+      var mediaType = String(file?.type || '').split(';', 1)[0].trim().toLowerCase()
+      var fileName = String(file?.name || '').toLowerCase()
+      var extension = fileName.match(/\.([a-z0-9][a-z0-9._-]*)$/)?.[1]
+      var byMediaType = NATIVE_IMAGE_EXTENSION_BY_MEDIA_TYPE[mediaType]
+      return [...new Set([extension, byMediaType].filter(Boolean))]
+    }
+
+    function isNativeImage(file) {
+      var extensions = nativeImageExtensions(file)
+      var allowed = config?.nativeImageExtensions
+      return Array.isArray(allowed) && extensions.some((extension) => allowed.includes(extension))
+    }
+
+    function partitionFiles(files) {
+      var native = []
+      var pathBacked = []
+      for (var i = 0; i < files.length; i++) {
+        if (isNativeImage(files[i])) native.push(files[i])
+        else pathBacked.push(files[i])
+      }
+      return { native, pathBacked }
+    }
+
+    function dataTransferHasNativeImage(dataTransfer) {
+      var files = dataTransfer?.files
+      if (files?.length > 0) return Array.from(files).some(isNativeImage)
+      var items = dataTransfer?.items || []
+      for (var i = 0; i < items.length; i++) {
+        if (items[i].kind !== 'file') continue
+        if (isNativeImage({ type: items[i].type })) return true
+      }
+      return false
     }
 
     function carriesFiles(event) {
@@ -311,7 +492,7 @@ window.__ModuleLoader__.load({
       await insertUploaded(active, target, base, settled)
     }
 
-    function consume(event, target, files) {
+    function processFiles(event, target, files, intercept) {
       var active = _ctx && activeSession(_ctx)
       if (!active) return false
       var snapshot = active.input.state.getSnapshot()
@@ -321,8 +502,10 @@ window.__ModuleLoader__.load({
         start: target.selectionStart ?? snapshot.draft.length,
         end: target.selectionEnd ?? target.selectionStart ?? snapshot.draft.length,
       }
-      event.preventDefault()
-      event.stopImmediatePropagation()
+      if (intercept) {
+        event.preventDefault()
+        event.stopImmediatePropagation()
+      }
       schedule(active.sessionId, () => routeFiles(active, target, base, files))
       return true
     }
@@ -334,24 +517,29 @@ window.__ModuleLoader__.load({
 
     function onPaste(event) {
       if (!isComposer(event.target)) return
+      if (config === null) return
       var files = filesOfPaste(event)
       if (files.length > 0) {
-        consume(event, event.target, files)
+        var partition = partitionFiles(files)
+        if (partition.pathBacked.length === 0) return
+        processFiles(event, event.target, partition.pathBacked, partition.native.length === 0)
         return
       }
       if (!config.longTextAsAttachment) return
       var text = event.clipboardData?.getData('text/plain') || ''
-      if (text.length >= config.longTextThreshold) consume(event, event.target, [longTextFile(text)])
+      if (text.length >= config.longTextThreshold) processFiles(event, event.target, [longTextFile(text)], true)
     }
 
     function onDragEnter(event) {
-      if (!carriesFiles(event) || !currentComposer()) return
+      if (config === null || !carriesFiles(event) || !currentComposer()) return
+      if (dataTransferHasNativeImage(event.dataTransfer)) return
       event.preventDefault()
       event.stopImmediatePropagation()
     }
 
     function onDragOver(event) {
-      if (!carriesFiles(event) || !currentComposer()) return
+      if (config === null || !carriesFiles(event) || !currentComposer()) return
+      if (dataTransferHasNativeImage(event.dataTransfer)) return
       event.preventDefault()
       event.stopImmediatePropagation()
       if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy'
@@ -361,8 +549,12 @@ window.__ModuleLoader__.load({
       if (!carriesFiles(event)) return
       var target = isComposer(event.target) ? event.target : currentComposer()
       if (!target) return
+      if (config === null) return
       var files = filesOfDrop(event)
-      if (files.length > 0) consume(event, target, files)
+      if (files.length === 0) return
+      var partition = partitionFiles(files)
+      if (partition.pathBacked.length === 0) return
+      processFiles(event, target, partition.pathBacked, partition.native.length === 0)
     }
 
     function removeReference(sessionId, ref, input, inputActions) {
@@ -384,6 +576,15 @@ window.__ModuleLoader__.load({
       if (category === 'text' || category === 'code') return '≡'
       if (category === 'archive') return '⌑'
       return '◇'
+    }
+
+    function categoryLabel(category) {
+      if (category === 'images') return '图片'
+      if (category === 'docs') return '文档'
+      if (category === 'text') return '文本'
+      if (category === 'code') return '代码'
+      if (category === 'archive') return '压缩包'
+      return '文件'
     }
 
     function formatBytes(bytes) {
@@ -494,7 +695,7 @@ window.__ModuleLoader__.load({
                 className: 'dsh-p2p-meta',
                 children: [
                   jsx.jsx('div', { className: 'dsh-p2p-name', title: item.path, children: item.name }),
-                  jsx.jsx('div', { className: 'dsh-p2p-sub', children: `${formatBytes(item.bytes)} · ${item.category} · ${item.path}` }),
+                  jsx.jsx('div', { className: 'dsh-p2p-sub', children: `${formatBytes(item.bytes)} · ${categoryLabel(item.category)} · ${item.path}` }),
                 ],
               }),
               jsx.jsxs('div', {
@@ -506,22 +707,22 @@ window.__ModuleLoader__.load({
                       className: 'dsh-p2p-button',
                       disabled: loading || saving,
                       onClick: editing ? () => setEditing(false) : openEditor,
-                      children: editing ? 'Collapse' : 'Edit',
+                      children: editing ? '收起' : '编辑',
                     }),
                   canOpenPath &&
                     jsx.jsx('button', {
                       type: 'button',
                       className: 'dsh-p2p-button',
                       disabled: opening,
-                      title: 'Open with the default application on the DSH host',
+                      title: '使用 DSH 主机上的默认应用打开',
                       onClick: openPath,
-                      children: opening ? 'Opening…' : 'Open',
+                      children: opening ? '打开中…' : '打开',
                     }),
                   jsx.jsx('button', {
                     type: 'button',
                     className: 'dsh-p2p-button dsh-p2p-remove',
-                    title: 'Remove from this message (keep the local file)',
-                    'aria-label': `Remove attachment ${item.name}`,
+                    title: '从此消息移除（保留本地文件）',
+                    'aria-label': `移除附件 ${item.name}`,
                     onClick: () => removeReference(item.sessionId, item.id, input, inputActions),
                     children: '×',
                   }),
@@ -535,12 +736,12 @@ window.__ModuleLoader__.load({
               'data-paste-to-path-editor': true,
               children: [
                 loading
-                  ? jsx.jsx('div', { children: 'Loading text attachment…' })
+                  ? jsx.jsx('div', { children: '正在加载文本附件…' })
                   : jsx.jsx('textarea', {
                       value: content,
                       disabled: saving,
                       onChange: (event) => setContent(event.target.value),
-                      'aria-label': `Edit ${item.name}`,
+                      'aria-label': `编辑 ${item.name}`,
                     }),
                 error && jsx.jsx('div', { className: 'dsh-p2p-error', children: error }),
                 jsx.jsxs('div', {
@@ -551,14 +752,14 @@ window.__ModuleLoader__.load({
                       className: 'dsh-p2p-button',
                       disabled: saving,
                       onClick: () => setEditing(false),
-                      children: 'Cancel',
+                      children: '取消',
                     }),
                     jsx.jsx('button', {
                       type: 'button',
                       className: 'dsh-p2p-button',
                       disabled: loading || saving,
                       onClick: save,
-                      children: saving ? 'Saving…' : 'Save',
+                      children: saving ? '保存中…' : '保存',
                     }),
                   ],
                 }),
@@ -604,6 +805,223 @@ window.__ModuleLoader__.load({
       })
     }
 
+    function PasteToPathSettingsCard({ scope }) {
+      var snapshot = React.useSyncExternalStore(
+        React.useCallback((listener) => scope.subscribe(listener), [scope]),
+        React.useCallback(() => scope.getSnapshot(), [scope]),
+        React.useCallback(() => scope.getSnapshot(), [scope]),
+      )
+      var settings = snapshot.value
+      var ready = snapshot.status === 'ready' && settings !== undefined
+      var writable = ready && snapshot.writable
+      var [open, setOpen] = React.useState(false)
+      var [threshold, setThreshold] = React.useState('')
+      var [extensions, setExtensions] = React.useState('')
+      var [maxBytes, setMaxBytes] = React.useState('')
+      var [editableTextMaxBytes, setEditableTextMaxBytes] = React.useState('')
+      var [error, setError] = React.useState('')
+
+      React.useEffect(() => {
+        if (Number.isSafeInteger(settings?.longTextThreshold)) setThreshold(String(settings.longTextThreshold))
+      }, [settings?.longTextThreshold])
+      React.useEffect(() => {
+        if (Array.isArray(settings?.nativeImageExtensions)) setExtensions(settings.nativeImageExtensions.join(', '))
+      }, [settings?.nativeImageExtensions])
+      React.useEffect(() => {
+        if (Number.isSafeInteger(settings?.maxBytes)) setMaxBytes(String(settings.maxBytes))
+      }, [settings?.maxBytes])
+      React.useEffect(() => {
+        if (Number.isSafeInteger(settings?.editableTextMaxBytes)) setEditableTextMaxBytes(String(settings.editableTextMaxBytes))
+      }, [settings?.editableTextMaxBytes])
+
+      function write(field, value) {
+        setError('')
+        Promise.resolve(scope.set(field, value)).catch((reason) => {
+          console.error('[dsh-paste-to-path] 保存设置失败', reason)
+          setError('设置保存失败，请检查输入。')
+        })
+      }
+
+      function writeNumber(field, text) {
+        var value = Number(text)
+        if (!Number.isSafeInteger(value) || value < 1) {
+          setError('请输入正整数。')
+          return
+        }
+        if (settings?.[field] === value) return
+        write(field, value)
+      }
+
+      function writeExtensions(text) {
+        var next = [...new Set(text.split(/[，,\s]+/).map((entry) => entry.trim().toLowerCase().replace(/^\.+/, '')).filter(Boolean))]
+        write('nativeImageExtensions', next)
+      }
+
+      function reset() {
+        setError('')
+        Promise.all(SETTINGS_FIELDS.map((field) => scope.unset(field))).catch((reason) => {
+          console.error('[dsh-paste-to-path] 恢复默认设置失败', reason)
+          setError('恢复默认设置失败，请重试。')
+        })
+      }
+
+      if (!ready) return null
+
+      return jsx.jsxs('li', {
+        className: open ? 'dsh-p2p-settings-card dsh-p2p-settings-card-open' : 'dsh-p2p-settings-card',
+        children: [
+          jsx.jsxs('button', {
+            type: 'button',
+            className: 'dsh-p2p-settings-header',
+            'aria-expanded': open,
+            onClick: () => setOpen((value) => !value),
+            children: [
+              jsx.jsxs('span', {
+                className: 'dsh-p2p-settings-head-text',
+                children: [
+                  jsx.jsx('span', { className: 'dsh-p2p-settings-title', children: '粘贴到路径' }),
+                  jsx.jsx('span', {
+                    className: 'dsh-p2p-settings-description',
+                    children: '配置长文本附件，以及交给 DSH 原生处理的图片后缀。',
+                  }),
+                ],
+              }),
+              jsx.jsx('svg', {
+                className: open ? 'dsh-p2p-settings-chevron dsh-p2p-settings-chevron-open' : 'dsh-p2p-settings-chevron',
+                width: 16,
+                height: 16,
+                viewBox: '0 0 16 16',
+                fill: 'none',
+                'aria-hidden': 'true',
+                children: jsx.jsx('path', {
+                  d: 'M4 6l4 4 4-4',
+                  stroke: 'currentColor',
+                  strokeWidth: 1.5,
+                  strokeLinecap: 'round',
+                  strokeLinejoin: 'round',
+                }),
+              }),
+            ],
+          }),
+          open && jsx.jsxs('div', {
+            className: 'dsh-p2p-settings-body',
+            children: [
+              jsx.jsxs('div', {
+                className: 'dsh-p2p-settings-fields',
+                children: [
+                  jsx.jsxs('label', {
+                    className: 'dsh-p2p-settings-check',
+                    children: [
+                      jsx.jsx('input', {
+                        type: 'checkbox',
+                        checked: settings.longTextAsAttachment,
+                        disabled: !writable,
+                        onChange: (event) => write('longTextAsAttachment', event.target.checked),
+                      }),
+                      '将长文本保存为附件',
+                    ],
+                  }),
+                  jsx.jsxs('label', {
+                    className: 'dsh-p2p-settings-field',
+                    children: [
+                      '长文本阈值（字符）',
+                      jsx.jsx('input', {
+                        type: 'number',
+                        min: 1,
+                        step: 1,
+                        value: threshold,
+                        disabled: !writable || !settings.longTextAsAttachment,
+                        onChange: (event) => setThreshold(event.target.value),
+                        onBlur: () => writeNumber('longTextThreshold', threshold),
+                        onKeyDown: (event) => {
+                          if (event.key === 'Enter') event.currentTarget.blur()
+                        },
+                      }),
+                      jsx.jsx('span', {
+                        className: 'dsh-p2p-settings-hint',
+                        children: '达到此字符数的文本会保存为 .txt 附件。',
+                      }),
+                    ],
+                  }),
+                  jsx.jsxs('label', {
+                    className: 'dsh-p2p-settings-field',
+                    children: [
+                      '交给 DSH 原生处理的图片后缀',
+                      jsx.jsx('input', {
+                        type: 'text',
+                        value: extensions,
+                        disabled: !writable,
+                        placeholder: '例如：png, jpg, webp, gif',
+                        onChange: (event) => setExtensions(event.target.value),
+                        onBlur: () => writeExtensions(extensions),
+                        onKeyDown: (event) => {
+                          if (event.key === 'Enter') event.currentTarget.blur()
+                        },
+                      }),
+                      jsx.jsx('span', {
+                        className: 'dsh-p2p-settings-hint',
+                        children: '用逗号或空格分隔后缀；匹配的文件会绕过插件，保留 DSH 原生图片预览和模型图片输入。',
+                      }),
+                    ],
+                  }),
+                  jsx.jsxs('label', {
+                    className: 'dsh-p2p-settings-field',
+                    children: [
+                      '单个附件大小上限（字节）',
+                      jsx.jsx('input', {
+                        type: 'number',
+                        min: 1,
+                        step: 1,
+                        value: maxBytes,
+                        disabled: !writable,
+                        onChange: (event) => setMaxBytes(event.target.value),
+                        onBlur: () => writeNumber('maxBytes', maxBytes),
+                        onKeyDown: (event) => {
+                          if (event.key === 'Enter') event.currentTarget.blur()
+                        },
+                      }),
+                    ],
+                  }),
+                  jsx.jsxs('label', {
+                    className: 'dsh-p2p-settings-field',
+                    children: [
+                      '可编辑文本大小上限（字节）',
+                      jsx.jsx('input', {
+                        type: 'number',
+                        min: 1,
+                        step: 1,
+                        value: editableTextMaxBytes,
+                        disabled: !writable,
+                        onChange: (event) => setEditableTextMaxBytes(event.target.value),
+                        onBlur: () => writeNumber('editableTextMaxBytes', editableTextMaxBytes),
+                        onKeyDown: (event) => {
+                          if (event.key === 'Enter') event.currentTarget.blur()
+                        },
+                      }),
+                    ],
+                  }),
+                ],
+              }),
+              jsx.jsxs('div', {
+                className: 'dsh-p2p-settings-actions',
+                children: [
+                  jsx.jsx('button', {
+                    type: 'button',
+                    className: 'dsh-p2p-button',
+                    disabled: !writable,
+                    onClick: reset,
+                    children: '恢复 profile 默认值',
+                  }),
+                  !writable && jsx.jsx('span', { className: 'dsh-p2p-settings-status', children: '当前设置为只读。' }),
+                  error && jsx.jsx('span', { className: 'dsh-p2p-error', children: error }),
+                ],
+              }),
+            ],
+          }),
+        ],
+      })
+    }
+
     function installStyle() {
       var tag = document.querySelector('style[data-plugin="dsh-paste-to-path"]')
       if (tag) return () => {}
@@ -614,18 +1032,47 @@ window.__ModuleLoader__.load({
       return () => tag.remove()
     }
 
-    function loadConfig() {
-      fetch('/paste-to-path/config')
-        .then((res) => (res.ok ? res.json() : Promise.reject(new Error(`config failed (${res.status})`))))
-        .then((value) => {
-          config = { ...config, ...value }
-        })
-        .catch((error) => console.error('[dsh-paste-to-path] config unavailable', error))
-    }
-
     function apply(ctx) {
       _ctx = ctx
       var disposeStyle = installStyle()
+      configScope = createBridgeScope('paste-to-path')
+      ctx.effect(
+        () => {
+          function synchronizeConfig() {
+            var snapshot = configScope.getSnapshot()
+            if (snapshot.status === 'ready') {
+              config = snapshot.value
+              configUnavailableLogged = false
+              return
+            }
+            config = null
+            if (snapshot.status === 'unavailable' && !configUnavailableLogged) {
+              configUnavailableLogged = true
+              console.error('[dsh-paste-to-path] settings bridge is unavailable; paste-to-path interception is disabled')
+            }
+          }
+          var dispose = configScope.subscribe(synchronizeConfig)
+          synchronizeConfig()
+          return () => {
+            dispose()
+            config = null
+            configScope.dispose()
+            configScope = null
+          }
+        },
+        'dsh-paste-to-path: settings mirror',
+      )
+      ctx.slots.inject('settings.plugin.item', () =>
+        ctx.slots.register(
+          {
+            name: 'settings.plugin.item',
+            id: 'paste-to-path',
+            order: 30,
+            inject: () => ({ scope: configScope }),
+          },
+          PasteToPathSettingsCard,
+        ),
+      )
       var disposeSource = ctx.inputTriggers.registerSource({
         trigger: '@',
         name: 'paste-to-path',
@@ -655,7 +1102,6 @@ window.__ModuleLoader__.load({
       document.addEventListener('dragenter', onDragEnter, true)
       document.addEventListener('dragover', onDragOver, true)
       document.addEventListener('drop', onDrop, true)
-      loadConfig()
       if (typeof ctx.effect === 'function') {
         ctx.effect(
           () => () => {
@@ -679,7 +1125,7 @@ window.__ModuleLoader__.load({
     }
 
     exports.apply = apply
-    exports.inject = ['sessions', 'conversation', 'slots', 'inputTriggers', 'connection', 'workspaces']
+    exports.inject = ['sessions', 'conversation', 'slots', 'inputTriggers', 'connection', 'remote', 'settingsScope', 'workspaces']
     return module.exports
   },
 })

@@ -6,6 +6,14 @@
         # Short text stays native. Text at or above this length becomes a .txt attachment.
         longTextAsAttachment: true
         longTextThreshold: 8000
+        # These extensions use DSH's native image UI and model-image input by default.
+        # Edit the comma-separated list in the plugin settings card to route other extensions too.
+        nativeImageExtensions:
+          - png
+          - jpg
+          - jpeg
+          - webp
+          - gif
         # Store up to 25 MiB per file; edit up to 1 MiB of text inside the dock card.
         maxBytes: 26214400
         editableTextMaxBytes: 1048576
