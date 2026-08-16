@@ -262,7 +262,11 @@ Default configuration is provided by `cordis.patch.yml`:
 | `maxBytes` | 25 MiB | Maximum size of one attachment |
 | `editableTextMaxBytes` | 1 MiB | Maximum text-file size editable in the Dock |
 
-Override the `paste-to-path` entry in your profile's `cordis.patch.yml` to change these values.
+On a local DSH Web deployment, these values are also available under **Settings → Plugins → Paste to Path**. Changes are persisted through DSH settings and apply without restarting the plugin. The reset button returns all four values to the profile defaults shown above.
+
+The attachment Dock, notifications, and settings card follow DSH's **Language** preference and include English and Simplified Chinese. The path instructions serialized for the Agent remain stable English protocol text and do not change with the UI language.
+
+The settings card is intentionally local-only. When the Web UI connects to a remote DSH Host, configure the `paste-to-path` entry in that profile's `cordis.patch.yml` instead. Attachment handling remains active with the Host-provided configuration even when the settings card is unavailable.
 
 ---
 

@@ -262,7 +262,11 @@ DSH 原生附件链路里，文件格式和模型能力通常绑得比较紧。
 | `maxBytes`             | 25 MiB | 单个附件最大大小              |
 | `editableTextMaxBytes` | 1 MiB  | Dock 中允许直接编辑的最大文本文件大小 |
 
-需要修改时，在 profile 的 `cordis.patch.yml` 中覆盖 `paste-to-path` 对应配置即可。
+本机运行 DSH Web 时，也可以在 **Settings → Plugins → Paste to Path** 中直接修改这些配置。变更通过 DSH settings 持久化并实时生效；重置按钮会把四项配置恢复为上方 profile 中的默认值。
+
+附件 Dock、操作提示和设置卡会跟随 DSH 的 **Language** 设置，目前提供英文和简体中文。发送给 Agent 的路径说明仍保持为稳定的英文协议文本，不会跟随界面语言变化。
+
+设置卡只在本机连接时开放。Web UI 连接远程 DSH Host 时，请在对应 profile 的 `cordis.patch.yml` 中覆盖 `paste-to-path` 配置；即使设置卡不可用，附件处理仍会按 Host 返回的配置继续工作。
 
 ---
 

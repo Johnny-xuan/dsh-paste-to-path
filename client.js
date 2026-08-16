@@ -19,11 +19,190 @@ window.__ModuleLoader__.load({
     var listeners = new Map()
     var previewUrls = new Set()
     var EMPTY_ITEMS = Object.freeze([])
-    var config = {
+    var DEFAULT_CONFIG = Object.freeze({
       longTextAsAttachment: true,
       longTextThreshold: 8000,
       maxBytes: 25 * 1024 * 1024,
       editableTextMaxBytes: 1024 * 1024,
+    })
+    var config = { ...DEFAULT_CONFIG }
+    var configScope = null
+    var settingsReady = false
+    var localeTranslate = null
+    var LOCALE_NS = 'paste-to-path'
+    var zh = Object.freeze({
+      'upload.failed': '无法保存 {count} 个附件：{reason}',
+      'upload.failedWithKept': '无法保存 {count} 个附件；已保留另外 {kept} 个：{reason}',
+      'insert.failed': '附件已保存，但无法添加到当前草稿：{path}',
+      'processing.failed': '附件处理失败：{reason}',
+      'request.failed': '操作失败：{reason}',
+      'attachment.saved': '附件已保存：{name}',
+      'preview.title': '预览 {name}',
+      'preview.close': '关闭图片预览',
+      'action.collapse': '收起',
+      'action.edit': '编辑',
+      'action.openTitle': '使用 DSH Host 的默认应用打开',
+      'action.opening': '正在打开…',
+      'action.open': '打开',
+      'action.removeTitle': '从本次消息中移除（保留本地文件）',
+      'action.removeAria': '移除附件 {name}',
+      'editor.loading': '正在加载文本附件…',
+      'editor.aria': '编辑 {name}',
+      'action.cancel': '取消',
+      'action.saving': '正在保存…',
+      'action.save': '保存',
+      'category.images': '图片',
+      'category.text': '文本',
+      'category.code': '代码',
+      'category.docs': '文档',
+      'category.archive': '压缩包',
+      'category.misc': '文件',
+      'settings.saveFailed': '设置保存失败。',
+      'settings.positiveInteger': '请输入正整数。',
+      'settings.resetFailed': '设置重置失败。',
+      'settings.title': '粘贴到路径',
+      'settings.description': '管理路径附件的大小限制和长文本行为。',
+      'settings.longText': '将长文本粘贴转换为附件',
+      'settings.threshold': '长文本阈值（字符）',
+      'settings.thresholdHint': '达到此长度的文本会保存为 .txt 附件。',
+      'settings.maxBytes': '单个附件大小上限（字节）',
+      'settings.editableTextMaxBytes': '可编辑文本大小上限（字节）',
+      'settings.reset': '恢复 profile 默认值',
+      'settings.readOnly': '当前设置为只读。',
+    })
+    var en = Object.freeze({
+      'upload.failed': 'Could not save {count} attachment(s): {reason}',
+      'upload.failedWithKept': 'Could not save {count} attachment(s); kept {kept} other attachment(s): {reason}',
+      'insert.failed': 'Attachment was saved but could not be added to the current draft: {path}',
+      'processing.failed': 'Attachment processing failed: {reason}',
+      'request.failed': 'Operation failed: {reason}',
+      'attachment.saved': 'Attachment saved: {name}',
+      'preview.title': 'Preview {name}',
+      'preview.close': 'Close image preview',
+      'action.collapse': 'Collapse',
+      'action.edit': 'Edit',
+      'action.openTitle': 'Open with the default application on the DSH host',
+      'action.opening': 'Opening…',
+      'action.open': 'Open',
+      'action.removeTitle': 'Remove from this message (keep the local file)',
+      'action.removeAria': 'Remove attachment {name}',
+      'editor.loading': 'Loading text attachment…',
+      'editor.aria': 'Edit {name}',
+      'action.cancel': 'Cancel',
+      'action.saving': 'Saving…',
+      'action.save': 'Save',
+      'category.images': 'images',
+      'category.text': 'text',
+      'category.code': 'code',
+      'category.docs': 'documents',
+      'category.archive': 'archives',
+      'category.misc': 'files',
+      'settings.saveFailed': 'The setting could not be saved.',
+      'settings.positiveInteger': 'Enter a positive integer.',
+      'settings.resetFailed': 'The settings could not be reset.',
+      'settings.title': 'Paste to Path',
+      'settings.description': 'Manage path-backed attachment limits and long-text behavior.',
+      'settings.longText': 'Turn long pasted text into an attachment',
+      'settings.threshold': 'Long-text threshold (characters)',
+      'settings.thresholdHint': 'Text at or above this length is stored as a .txt attachment.',
+      'settings.maxBytes': 'Maximum attachment size (bytes)',
+      'settings.editableTextMaxBytes': 'Maximum editable text size (bytes)',
+      'settings.reset': 'Reset to profile defaults',
+      'settings.readOnly': 'Settings are read-only.',
+    })
+
+    function fallbackTranslate(key, params = {}) {
+      var template = en[key] || key
+      return template.replace(/\{([^}]+)\}/g, (_, name) => String(params[name] ?? `{${name}}`))
+    }
+
+    function tr(key, params) {
+      return localeTranslate ? localeTranslate(key, params) : fallbackTranslate(key, params)
+    }
+
+    function createSnapshot(initial) {
+      var value = initial
+      var subscribers = new Set()
+      return {
+        get: () => value,
+        subscribe(listener) {
+          subscribers.add(listener)
+          return () => subscribers.delete(listener)
+        },
+        set(next) {
+          value = next
+          for (var subscriber of subscribers) subscriber()
+        },
+      }
+    }
+
+    function createConfigScope() {
+      var snapshot = createSnapshot({
+        status: 'loading',
+        value: undefined,
+        base: undefined,
+        writable: false,
+      })
+      var tail = Promise.resolve()
+      var disposed = false
+
+      function enqueue(operation) {
+        if (disposed) return Promise.resolve()
+        var task = tail.then(() => (disposed ? undefined : operation()))
+        tail = task.catch(() => undefined)
+        return task
+      }
+
+      async function request(method, body) {
+        var response = await fetch('/paste-to-path/settings', {
+          method,
+          ...(body === undefined
+            ? {}
+            : { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }),
+        })
+        var payload = await response.json().catch(() => ({}))
+        if (!response.ok) throw new Error(payload.error || `settings request failed (${response.status})`)
+        return payload
+      }
+
+      function accept(payload) {
+        snapshot.set({
+          status: 'ready',
+          value: payload.value,
+          base: payload.base,
+          writable: payload.writable === true,
+        })
+      }
+
+      async function load() {
+        try {
+          accept(await request('GET'))
+        } catch {
+          snapshot.set({ ...snapshot.get(), status: 'unavailable', writable: false })
+        }
+      }
+
+      async function write(method, body) {
+        try {
+          accept(await request(method, body))
+        } catch (error) {
+          await load()
+          throw error
+        }
+      }
+
+      var scope = {
+        getSnapshot: () => snapshot.get(),
+        subscribe: (listener) => snapshot.subscribe(listener),
+        load: () => enqueue(load),
+        set: (field, value) => enqueue(() => write('PATCH', { field, value })),
+        reset: () => enqueue(() => write('DELETE')),
+        dispose() {
+          disposed = true
+        },
+      }
+      scope.load()
+      return scope
     }
 
     var css = `
@@ -46,6 +225,25 @@ window.__ModuleLoader__.load({
       .dsh-p2p-editor textarea:focus{border-color:var(--dsw-alias-state-business-primary)}
       .dsh-p2p-editor-row{display:flex;justify-content:flex-end;gap:6px}
       .dsh-p2p-error{color:var(--dsw-alias-state-error-primary);font-size:12px}
+      .dsh-p2p-settings-card{list-style:none;border:1px solid var(--dsw-alias-border-l2);border-radius:12px;background:var(--dsw-alias-bg-layer-3);transition:border-color .16s,background .16s}
+      .dsh-p2p-settings-card:hover{border-color:var(--dsw-alias-label-dimmed)}
+      .dsh-p2p-settings-card-open{background:var(--dsw-alias-bg-layer-2);border-color:var(--dsw-alias-label-dimmed)}
+      .dsh-p2p-settings-header{appearance:none;width:100%;color:inherit;font:inherit;text-align:left;cursor:pointer;background:transparent;border:0;border-radius:12px;display:flex;align-items:center;gap:12px;padding:14px 16px}
+      .dsh-p2p-settings-header:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:-2px}
+      .dsh-p2p-settings-head-text{display:flex;flex-direction:column;flex:1;gap:4px;min-width:0}
+      .dsh-p2p-settings-title{color:var(--dsw-alias-label-primary);font-size:15px;font-weight:600;line-height:1.4}
+      .dsh-p2p-settings-description{color:var(--dsw-alias-label-tertiary);font-size:13px;line-height:1.5}
+      .dsh-p2p-settings-chevron{flex:none;color:var(--dsw-alias-label-tertiary);transition:transform .16s}
+      .dsh-p2p-settings-chevron-open{transform:rotate(180deg)}
+      .dsh-p2p-settings-body{border-top:1px solid var(--dsw-alias-border-l2);margin:0 16px;padding:12px 0 8px}
+      .dsh-p2p-settings-fields{display:grid;gap:12px}
+      .dsh-p2p-settings-field{display:grid;gap:4px;font-size:13px}
+      .dsh-p2p-settings-field input[type=number]{box-sizing:border-box;width:100%;max-width:420px;border:1px solid var(--dsw-alias-border-l2);border-radius:7px;background:var(--dsw-specific-input-major);color:var(--dsw-alias-label-primary);padding:5px 8px;font:inherit}
+      .dsh-p2p-settings-field input:disabled{opacity:.55;cursor:not-allowed}
+      .dsh-p2p-settings-hint{color:var(--dsw-alias-label-tertiary);font-size:12px;line-height:17px}
+      .dsh-p2p-settings-check{display:flex;align-items:center;gap:7px;cursor:pointer}
+      .dsh-p2p-settings-actions{display:flex;align-items:center;justify-content:flex-end;gap:8px;margin-top:14px;padding-top:12px;border-top:1px solid var(--dsw-alias-border-l2)}
+      .dsh-p2p-settings-status{color:var(--dsw-alias-label-tertiary);font-size:12px}
     `
 
     function sessionItems(sessionId) {
@@ -257,10 +455,12 @@ window.__ModuleLoader__.load({
         else failures.push(result.reason)
       }
       if (failures.length > 0) {
-        var kept = successful.length > 0 ? `; ${successful.length} other attachment(s) were kept` : ''
+        var reason = failures[0]?.message || failures[0]
         active.input.notify(
           'error',
-          `${failures.length} pasted attachment(s) could not be saved${kept}: ${failures[0]?.message || failures[0]}`,
+          successful.length > 0
+            ? tr('upload.failedWithKept', { count: failures.length, kept: successful.length, reason })
+            : tr('upload.failed', { count: failures.length, reason }),
         )
       }
       if (successful.length === 0) return Promise.resolve()
@@ -278,7 +478,7 @@ window.__ModuleLoader__.load({
             span,
           })
           if (applied !== true) {
-            active.input.notify('error', `Attachment was saved but could not be added to the current draft: ${item.path}`)
+            active.input.notify('error', tr('insert.failed', { path: item.path }))
           }
         }
         requestAnimationFrame(() => {
@@ -297,7 +497,7 @@ window.__ModuleLoader__.load({
         .catch(() => {})
         .then(task)
         .catch((error) => {
-          notify(sessionId, 'error', `Attachment processing failed: ${error?.message || error}`)
+          notify(sessionId, 'error', tr('processing.failed', { reason: error?.message || error }))
           console.error('[dsh-paste-to-path] attachment task failed', error)
         })
       queues.set(sessionId, next)
@@ -386,6 +586,11 @@ window.__ModuleLoader__.load({
       return '◇'
     }
 
+    function categoryLabel(category, t) {
+      var key = `category.${category}`
+      return t(key) === key ? t('category.misc') : t(key)
+    }
+
     function formatBytes(bytes) {
       if (bytes < 1024) return `${bytes} B`
       if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
@@ -412,7 +617,7 @@ window.__ModuleLoader__.load({
       )
     }
 
-    function AttachmentCard({ item, input, inputActions, canOpenPath }) {
+    function AttachmentCard({ item, input, inputActions, canOpenPath, t }) {
       var [editing, setEditing] = React.useState(false)
       var [loading, setLoading] = React.useState(false)
       var [saving, setSaving] = React.useState(false)
@@ -432,7 +637,7 @@ window.__ModuleLoader__.load({
             setLoading(false)
           },
           (reason) => {
-            setError(reason.message || String(reason))
+            setError(t('request.failed', { reason: reason.message || String(reason) }))
             setLoading(false)
           },
         )
@@ -447,10 +652,10 @@ window.__ModuleLoader__.load({
             setSaving(false)
             setEditing(false)
             publish(item.sessionId, [...sessionItems(item.sessionId)])
-            notify(item.sessionId, 'info', `Attachment saved: ${item.name}`)
+            notify(item.sessionId, 'info', t('attachment.saved', { name: item.name }))
           },
           (reason) => {
-            setError(reason.message || String(reason))
+            setError(t('request.failed', { reason: reason.message || String(reason) }))
             setSaving(false)
           },
         )
@@ -462,7 +667,7 @@ window.__ModuleLoader__.load({
         _ctx.workspaces.openPath(item.path).then(
           () => setOpening(false),
           (reason) => {
-            setError(reason.message || String(reason))
+            setError(t('request.failed', { reason: reason.message || String(reason) }))
             setOpening(false)
           },
         )
@@ -480,8 +685,8 @@ window.__ModuleLoader__.load({
                 ? jsx.jsx('button', {
                     type: 'button',
                     className: 'dsh-p2p-thumbnail',
-                    title: `Preview ${item.name}`,
-                    'aria-label': `Preview ${item.name}`,
+                    title: t('preview.title', { name: item.name }),
+                    'aria-label': t('preview.title', { name: item.name }),
                     onClick: () => setPreviewing(true),
                     children: jsx.jsx('img', {
                       src: item.previewUrl,
@@ -494,7 +699,10 @@ window.__ModuleLoader__.load({
                 className: 'dsh-p2p-meta',
                 children: [
                   jsx.jsx('div', { className: 'dsh-p2p-name', title: item.path, children: item.name }),
-                  jsx.jsx('div', { className: 'dsh-p2p-sub', children: `${formatBytes(item.bytes)} · ${item.category} · ${item.path}` }),
+                  jsx.jsx('div', {
+                    className: 'dsh-p2p-sub',
+                    children: `${formatBytes(item.bytes)} · ${categoryLabel(item.category, t)} · ${item.path}`,
+                  }),
                 ],
               }),
               jsx.jsxs('div', {
@@ -506,22 +714,22 @@ window.__ModuleLoader__.load({
                       className: 'dsh-p2p-button',
                       disabled: loading || saving,
                       onClick: editing ? () => setEditing(false) : openEditor,
-                      children: editing ? 'Collapse' : 'Edit',
+                      children: editing ? t('action.collapse') : t('action.edit'),
                     }),
                   canOpenPath &&
                     jsx.jsx('button', {
                       type: 'button',
                       className: 'dsh-p2p-button',
                       disabled: opening,
-                      title: 'Open with the default application on the DSH host',
+                      title: t('action.openTitle'),
                       onClick: openPath,
-                      children: opening ? 'Opening…' : 'Open',
+                      children: opening ? t('action.opening') : t('action.open'),
                     }),
                   jsx.jsx('button', {
                     type: 'button',
                     className: 'dsh-p2p-button dsh-p2p-remove',
-                    title: 'Remove from this message (keep the local file)',
-                    'aria-label': `Remove attachment ${item.name}`,
+                    title: t('action.removeTitle'),
+                    'aria-label': t('action.removeAria', { name: item.name }),
                     onClick: () => removeReference(item.sessionId, item.id, input, inputActions),
                     children: '×',
                   }),
@@ -535,12 +743,12 @@ window.__ModuleLoader__.load({
               'data-paste-to-path-editor': true,
               children: [
                 loading
-                  ? jsx.jsx('div', { children: 'Loading text attachment…' })
+                  ? jsx.jsx('div', { children: t('editor.loading') })
                   : jsx.jsx('textarea', {
                       value: content,
                       disabled: saving,
                       onChange: (event) => setContent(event.target.value),
-                      'aria-label': `Edit ${item.name}`,
+                      'aria-label': t('editor.aria', { name: item.name }),
                     }),
                 error && jsx.jsx('div', { className: 'dsh-p2p-error', children: error }),
                 jsx.jsxs('div', {
@@ -551,14 +759,14 @@ window.__ModuleLoader__.load({
                       className: 'dsh-p2p-button',
                       disabled: saving,
                       onClick: () => setEditing(false),
-                      children: 'Cancel',
+                      children: t('action.cancel'),
                     }),
                     jsx.jsx('button', {
                       type: 'button',
                       className: 'dsh-p2p-button',
                       disabled: loading || saving,
                       onClick: save,
-                      children: saving ? 'Saving…' : 'Save',
+                      children: saving ? t('action.saving') : t('action.save'),
                     }),
                   ],
                 }),
@@ -569,14 +777,14 @@ window.__ModuleLoader__.load({
             jsx.jsx(attachmentUi.ImageLightbox, {
               src: item.previewUrl,
               alt: item.name,
-              labels: { dialog: `Preview ${item.name}`, close: 'Close image preview' },
+              labels: { dialog: t('preview.title', { name: item.name }), close: t('preview.close') },
               onClose: () => setPreviewing(false),
             }),
         ],
       })
     }
 
-    function AttachmentDock({ sessionId, input, inputActions }) {
+    function AttachmentDock({ sessionId, input, inputActions, t }) {
       var connection = _ctx.connection
       var hostDescription = React.useSyncExternalStore(
         React.useCallback((listener) => connection.hostDescription.subscribe(listener), [connection]),
@@ -599,8 +807,197 @@ window.__ModuleLoader__.load({
       return jsx.jsx('div', {
         className: 'dsh-p2p-dock',
         children: visible.map((item) =>
-          jsx.jsx(AttachmentCard, { item, input, inputActions, canOpenPath }, item.id),
+          jsx.jsx(AttachmentCard, { item, input, inputActions, canOpenPath, t }, item.id),
         ),
+      })
+    }
+
+    function PasteToPathSettingsCard({ scope, t }) {
+      var snapshot = React.useSyncExternalStore(
+        React.useCallback((listener) => scope.subscribe(listener), [scope]),
+        React.useCallback(() => scope.getSnapshot(), [scope]),
+        React.useCallback(() => scope.getSnapshot(), [scope]),
+      )
+      var settings = snapshot.value
+      var ready = snapshot.status === 'ready' && settings !== undefined
+      var writable = ready && snapshot.writable
+      var [open, setOpen] = React.useState(false)
+      var [threshold, setThreshold] = React.useState('')
+      var [maxBytes, setMaxBytes] = React.useState('')
+      var [editableTextMaxBytes, setEditableTextMaxBytes] = React.useState('')
+      var [error, setError] = React.useState('')
+
+      React.useEffect(() => {
+        if (Number.isSafeInteger(settings?.longTextThreshold)) setThreshold(String(settings.longTextThreshold))
+      }, [settings?.longTextThreshold])
+      React.useEffect(() => {
+        if (Number.isSafeInteger(settings?.maxBytes)) setMaxBytes(String(settings.maxBytes))
+      }, [settings?.maxBytes])
+      React.useEffect(() => {
+        if (Number.isSafeInteger(settings?.editableTextMaxBytes)) {
+          setEditableTextMaxBytes(String(settings.editableTextMaxBytes))
+        }
+      }, [settings?.editableTextMaxBytes])
+
+      function write(field, value) {
+        setError('')
+        Promise.resolve(scope.set(field, value)).catch((reason) => {
+          console.error('[dsh-paste-to-path] could not save setting', reason)
+          setError(t('settings.saveFailed'))
+        })
+      }
+
+      function writeNumber(field, text) {
+        var value = Number(text)
+        if (!Number.isSafeInteger(value) || value < 1) {
+          setError(t('settings.positiveInteger'))
+          return
+        }
+        if (settings?.[field] === value) return
+        write(field, value)
+      }
+
+      function reset() {
+        setError('')
+        Promise.resolve(scope.reset()).catch((reason) => {
+          console.error('[dsh-paste-to-path] could not reset settings', reason)
+          setError(t('settings.resetFailed'))
+        })
+      }
+
+      if (!ready) return null
+
+      return jsx.jsxs('li', {
+        className: open ? 'dsh-p2p-settings-card dsh-p2p-settings-card-open' : 'dsh-p2p-settings-card',
+        children: [
+          jsx.jsxs('button', {
+            type: 'button',
+            className: 'dsh-p2p-settings-header',
+            'aria-expanded': open,
+            onClick: () => setOpen((value) => !value),
+            children: [
+              jsx.jsxs('span', {
+                className: 'dsh-p2p-settings-head-text',
+                children: [
+                  jsx.jsx('span', { className: 'dsh-p2p-settings-title', children: t('settings.title') }),
+                  jsx.jsx('span', {
+                    className: 'dsh-p2p-settings-description',
+                    children: t('settings.description'),
+                  }),
+                ],
+              }),
+              jsx.jsx('svg', {
+                className: open ? 'dsh-p2p-settings-chevron dsh-p2p-settings-chevron-open' : 'dsh-p2p-settings-chevron',
+                width: 16,
+                height: 16,
+                viewBox: '0 0 16 16',
+                fill: 'none',
+                'aria-hidden': 'true',
+                children: jsx.jsx('path', {
+                  d: 'M4 6l4 4 4-4',
+                  stroke: 'currentColor',
+                  strokeWidth: 1.5,
+                  strokeLinecap: 'round',
+                  strokeLinejoin: 'round',
+                }),
+              }),
+            ],
+          }),
+          open && jsx.jsxs('div', {
+            className: 'dsh-p2p-settings-body',
+            children: [
+              jsx.jsxs('div', {
+                className: 'dsh-p2p-settings-fields',
+                children: [
+                  jsx.jsxs('label', {
+                    className: 'dsh-p2p-settings-check',
+                    children: [
+                      jsx.jsx('input', {
+                        type: 'checkbox',
+                        checked: settings.longTextAsAttachment,
+                        disabled: !writable,
+                        onChange: (event) => write('longTextAsAttachment', event.target.checked),
+                      }),
+                      t('settings.longText'),
+                    ],
+                  }),
+                  jsx.jsxs('label', {
+                    className: 'dsh-p2p-settings-field',
+                    children: [
+                      t('settings.threshold'),
+                      jsx.jsx('input', {
+                        type: 'number',
+                        min: 1,
+                        step: 1,
+                        value: threshold,
+                        disabled: !writable || !settings.longTextAsAttachment,
+                        onChange: (event) => setThreshold(event.target.value),
+                        onBlur: () => writeNumber('longTextThreshold', threshold),
+                        onKeyDown: (event) => {
+                          if (event.key === 'Enter') event.currentTarget.blur()
+                        },
+                      }),
+                      jsx.jsx('span', {
+                        className: 'dsh-p2p-settings-hint',
+                        children: t('settings.thresholdHint'),
+                      }),
+                    ],
+                  }),
+                  jsx.jsxs('label', {
+                    className: 'dsh-p2p-settings-field',
+                    children: [
+                      t('settings.maxBytes'),
+                      jsx.jsx('input', {
+                        type: 'number',
+                        min: 1,
+                        step: 1,
+                        value: maxBytes,
+                        disabled: !writable,
+                        onChange: (event) => setMaxBytes(event.target.value),
+                        onBlur: () => writeNumber('maxBytes', maxBytes),
+                        onKeyDown: (event) => {
+                          if (event.key === 'Enter') event.currentTarget.blur()
+                        },
+                      }),
+                    ],
+                  }),
+                  jsx.jsxs('label', {
+                    className: 'dsh-p2p-settings-field',
+                    children: [
+                      t('settings.editableTextMaxBytes'),
+                      jsx.jsx('input', {
+                        type: 'number',
+                        min: 1,
+                        step: 1,
+                        value: editableTextMaxBytes,
+                        disabled: !writable,
+                        onChange: (event) => setEditableTextMaxBytes(event.target.value),
+                        onBlur: () => writeNumber('editableTextMaxBytes', editableTextMaxBytes),
+                        onKeyDown: (event) => {
+                          if (event.key === 'Enter') event.currentTarget.blur()
+                        },
+                      }),
+                    ],
+                  }),
+                ],
+              }),
+              jsx.jsxs('div', {
+                className: 'dsh-p2p-settings-actions',
+                children: [
+                  jsx.jsx('button', {
+                    type: 'button',
+                    className: 'dsh-p2p-button',
+                    disabled: !writable,
+                    onClick: reset,
+                    children: t('settings.reset'),
+                  }),
+                  !writable && jsx.jsx('span', { className: 'dsh-p2p-settings-status', children: t('settings.readOnly') }),
+                  error && jsx.jsx('span', { className: 'dsh-p2p-error', children: error }),
+                ],
+              }),
+            ],
+          }),
+        ],
       })
     }
 
@@ -614,11 +1011,16 @@ window.__ModuleLoader__.load({
       return () => tag.remove()
     }
 
+    function acceptConfig(value) {
+      if (!value || typeof value !== 'object' || Array.isArray(value)) return
+      config = { ...config, ...value }
+    }
+
     function loadConfig() {
-      fetch('/paste-to-path/config')
+      return fetch('/paste-to-path/config')
         .then((res) => (res.ok ? res.json() : Promise.reject(new Error(`config failed (${res.status})`))))
         .then((value) => {
-          config = { ...config, ...value }
+          if (!settingsReady) acceptConfig(value)
         })
         .catch((error) => console.error('[dsh-paste-to-path] config unavailable', error))
     }
@@ -626,6 +1028,29 @@ window.__ModuleLoader__.load({
     function apply(ctx) {
       _ctx = ctx
       var disposeStyle = installStyle()
+      ctx.effect(() => ctx.locale.register(LOCALE_NS, { zh, en }), 'dsh-paste-to-path: dictionaries')
+      localeTranslate = ctx.locale.bind(LOCALE_NS)
+      configScope = createConfigScope()
+      var synchronizeConfig = () => {
+        var snapshot = configScope?.getSnapshot()
+        if (snapshot?.status !== 'ready' || snapshot.value === undefined) return
+        settingsReady = true
+        acceptConfig(snapshot.value)
+      }
+      var disposeConfig = configScope.subscribe(synchronizeConfig)
+      synchronizeConfig()
+      ctx.slots.inject('settings.plugin.item', () =>
+        ctx.slots.register(
+          {
+            name: 'settings.plugin.item',
+            id: 'paste-to-path',
+            order: 30,
+            locale: LOCALE_NS,
+            inject: () => ({ scope: configScope }),
+          },
+          PasteToPathSettingsCard,
+        ),
+      )
       var disposeSource = ctx.inputTriggers.registerSource({
         trigger: '@',
         name: 'paste-to-path',
@@ -647,6 +1072,7 @@ window.__ModuleLoader__.load({
             id: 'paste-to-path-attachments',
             order: 5,
             registrant: 'dsh-paste-to-path',
+            locale: LOCALE_NS,
           },
           AttachmentDock,
         ),
@@ -663,6 +1089,7 @@ window.__ModuleLoader__.load({
             document.removeEventListener('dragenter', onDragEnter, true)
             document.removeEventListener('dragover', onDragOver, true)
             document.removeEventListener('drop', onDrop, true)
+            disposeConfig()
             disposeSource()
             disposeStyle()
             queues.clear()
@@ -671,6 +1098,11 @@ window.__ModuleLoader__.load({
             byId.clear()
             for (var url of previewUrls) URL.revokeObjectURL(url)
             previewUrls.clear()
+            config = { ...DEFAULT_CONFIG }
+            configScope.dispose()
+            configScope = null
+            settingsReady = false
+            localeTranslate = null
             _ctx = null
           },
           'dsh-paste-to-path: path-backed attachments',
@@ -679,7 +1111,7 @@ window.__ModuleLoader__.load({
     }
 
     exports.apply = apply
-    exports.inject = ['sessions', 'conversation', 'slots', 'inputTriggers', 'connection', 'workspaces']
+    exports.inject = ['sessions', 'conversation', 'slots', 'inputTriggers', 'connection', 'locale', 'workspaces']
     return module.exports
   },
 })

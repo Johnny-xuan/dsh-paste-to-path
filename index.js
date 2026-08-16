@@ -7,15 +7,24 @@ import { randomBytes, randomUUID } from 'node:crypto'
 import { mkdir, readFile, realpath, stat, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { basename, extname, isAbsolute, join, resolve } from 'node:path'
+import z from '@deepseek-ai/schemastery'
 
 export const name = 'dsh-paste-to-path'
-export const inject = ['webServer']
+export const inject = ['webServer', 'settings']
 
 const DEFAULTS = Object.freeze({
   longTextAsAttachment: true,
   longTextThreshold: 8000,
   maxBytes: 25 * 1024 * 1024,
   editableTextMaxBytes: 1024 * 1024,
+})
+
+export const Config = z.object({
+  longTextAsAttachment: z.boolean().default(DEFAULTS.longTextAsAttachment),
+  longTextThreshold: z.natural().min(1).default(DEFAULTS.longTextThreshold),
+  maxBytes: z.natural().min(1).default(DEFAULTS.maxBytes),
+  editableTextMaxBytes: z.natural().min(1).default(DEFAULTS.editableTextMaxBytes),
+  dir: z.string(),
 })
 
 const CATEGORY_RULES = [
@@ -51,13 +60,14 @@ function positiveInteger(value, fallback) {
 }
 
 export function resolveConfig(config = {}) {
-  return {
+  const resolved = {
     longTextAsAttachment: config.longTextAsAttachment !== false,
     longTextThreshold: positiveInteger(config.longTextThreshold, DEFAULTS.longTextThreshold),
     maxBytes: positiveInteger(config.maxBytes, DEFAULTS.maxBytes),
     editableTextMaxBytes: positiveInteger(config.editableTextMaxBytes, DEFAULTS.editableTextMaxBytes),
-    dir: config.dir,
   }
+  if (typeof config.dir === 'string') resolved.dir = config.dir
+  return resolved
 }
 
 function firstHeader(value) {
@@ -175,9 +185,45 @@ function attachmentFor(registry, req) {
   return attachment
 }
 
+const SETTINGS_FIELDS = new Set([
+  'longTextAsAttachment',
+  'longTextThreshold',
+  'maxBytes',
+  'editableTextMaxBytes',
+])
+
+function isLoopbackSettingsRequest(req) {
+  const address = req.socket?.remoteAddress
+  if (address !== '127.0.0.1' && address !== '::1' && address !== '::ffff:127.0.0.1') return false
+  if (req.headers['sec-fetch-site'] === 'cross-site') return false
+  const origin = firstHeader(req.headers.origin)
+  if (origin === '') return true
+  const host = firstHeader(req.headers.host)
+  if (host === '') return false
+  try {
+    return new URL(origin).host === new URL(`http://${host}`).host
+  } catch {
+    return false
+  }
+}
+
+async function readJson(req) {
+  const buffer = await readBody(req, 16 * 1024)
+  try {
+    return JSON.parse(buffer.toString('utf8'))
+  } catch {
+    throw new RequestError(400, 'invalid JSON body')
+  }
+}
+
 export function apply(ctx, rawConfig = {}) {
-  const config = resolveConfig(rawConfig)
-  const fallbackDir = config.dir ?? join(process.env.DSH_HOME ?? join(homedir(), '.dsh'), 'tmp-paste')
+  const entryConfig = resolveConfig(rawConfig)
+  const settingsScope = ctx.settings.register('paste-to-path', Config, { base: entryConfig })
+  let config = resolveConfig(settingsScope.get())
+  const disposeSettingsWatch = settingsScope.watch((next) => {
+    config = resolveConfig(next)
+  })
+  const defaultFallbackDir = join(process.env.DSH_HOME ?? join(homedir(), '.dsh'), 'tmp-paste')
   const registry = new Map()
 
   const routes = [
@@ -193,6 +239,37 @@ export function apply(ctx, rawConfig = {}) {
           maxBytes: config.maxBytes,
           editableTextMaxBytes: config.editableTextMaxBytes,
         })
+      },
+    },
+    {
+      name: 'paste-to-path-settings',
+      kind: 'exact',
+      path: '/paste-to-path/settings',
+      handler: async (req, res) => {
+        try {
+          if (!isLoopbackSettingsRequest(req)) throw new RequestError(403, 'local settings access only')
+          if (req.method === 'GET') {
+            return json(res, 200, { value: config, base: entryConfig, writable: ctx.settings.writable !== false })
+          }
+          if (req.method === 'PATCH') {
+            const body = await readJson(req)
+            if (body === null || typeof body !== 'object' || !SETTINGS_FIELDS.has(body.field)) {
+              throw new RequestError(400, 'unknown settings field')
+            }
+            await settingsScope.update({ [body.field]: body.value })
+            config = resolveConfig(settingsScope.get())
+            return json(res, 200, { value: config, base: entryConfig, writable: ctx.settings.writable !== false })
+          }
+          if (req.method === 'DELETE') {
+            await settingsScope.replace({})
+            config = resolveConfig(settingsScope.get())
+            return json(res, 200, { value: config, base: entryConfig, writable: ctx.settings.writable !== false })
+          }
+          return json(res, 405, { error: 'method not allowed' }, { allow: 'GET, PATCH, DELETE' })
+        } catch (error) {
+          const status = error instanceof RequestError ? error.status : 500
+          return json(res, status, { error: String(error?.message ?? error) })
+        }
       },
     },
     {
@@ -234,7 +311,7 @@ export function apply(ctx, rawConfig = {}) {
           const mediaType = normalizedMediaType(firstHeader(req.headers['content-type']))
           const buffer = await readBody(req, config.maxBytes)
           const category = categoryOf(fileName, mediaType)
-          const root = await storageRoot(workspace, fallbackDir)
+          const root = await storageRoot(workspace, config.dir ?? defaultFallbackDir)
           const displayName = safeFileName(fileName, mediaType)
           const path = await writeUnique(join(root, category), displayName, buffer)
           const id = randomUUID()
@@ -251,5 +328,11 @@ export function apply(ctx, rawConfig = {}) {
   ]
 
   for (const route of routes) ctx.webServer.register(route)
-  ctx.effect?.(() => () => registry.clear(), 'dsh-paste-to-path: attachment registry')
+  ctx.effect?.(
+    () => () => {
+      disposeSettingsWatch()
+      registry.clear()
+    },
+    'dsh-paste-to-path: settings and attachment registry',
+  )
 }
