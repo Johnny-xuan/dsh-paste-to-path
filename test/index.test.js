@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, readFile, realpath, rm, stat } from 'node:fs/promises'
+import { mkdtemp, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Readable } from 'node:stream'
 import test from 'node:test'
+import { fileURLToPath } from 'node:url'
 
-import { apply, categoryOf, Config, resolveConfig, safeFileName } from '../index.js'
+import { apply, categoryOf, Config, normalizePastedPath, resolveConfig, safeFileName } from '../index.js'
 
 function response() {
   return {
@@ -106,22 +107,28 @@ test('keeps partial configuration compatible and normalizes invalid numeric valu
     longTextThreshold: 1200,
     maxBytes: 0,
     editableTextMaxBytes: 12,
+    pathTextAsAttachment: false,
+    windowsClipboardFallback: false,
   })
   assert.equal(config.longTextAsAttachment, false)
   assert.equal(config.longTextThreshold, 1200)
   assert.equal(config.maxBytes, 25 * 1024 * 1024)
   assert.equal(config.editableTextMaxBytes, 12)
+  assert.equal(config.pathTextAsAttachment, false)
+  assert.equal(config.windowsClipboardFallback, false)
   assert.deepEqual(Config({ longTextThreshold: 1200 }), {
     longTextAsAttachment: true,
     longTextThreshold: 1200,
     maxBytes: 25 * 1024 * 1024,
     editableTextMaxBytes: 1024 * 1024,
+    pathTextAsAttachment: true,
+    windowsClipboardFallback: true,
   })
 })
 
-test('public package metadata describes the first release and excludes development files', async () => {
+test('public package metadata targets the rc.7 settings contract and excludes development files', async () => {
   const pkg = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'))
-  assert.equal(pkg.version, '0.0.1')
+  assert.equal(pkg.version, '0.0.2')
   assert.equal(pkg.private, undefined)
   assert.equal(pkg.publishConfig?.access, 'public')
   assert.equal(pkg.repository?.url, 'git+https://github.com/Johnny-xuan/dsh-paste-to-path.git')
@@ -133,7 +140,8 @@ test('public package metadata describes the first release and excludes developme
   assert.ok(pkg.peerDependencies?.['@deepseek-ai/dsh-settings'])
   assert.ok(pkg.dependencies?.['@deepseek-ai/schemastery'])
   assert.ok(pkg.files.includes('README.md'))
-  assert.ok(pkg.files.includes('README.zh.md'))
+  assert.ok(!pkg.files.includes('README.zh.md'))
+  assert.equal(pkg.peerDependencies?.['@deepseek-ai/dsh-client-ui-settings'], '>=0.1.0-rc.7 <0.2.0')
   assert.ok(!pkg.files.some((entry) => entry.startsWith('test')))
 })
 
@@ -163,19 +171,25 @@ test('browser keeps every attachment on the path-backed rail and exposes a resil
   assert.match(source, /children: editing \? t\('action\.collapse'\) : t\('action\.edit'\)/)
   assert.match(source, /tr\('processing\.failed'/)
   assert.match(pasteHandler, /files\.length > 0[\s\S]*consume\(event, event\.target, files\)/)
+  assert.match(pasteHandler, /pathsOfPaste\(event\)/)
   assert.match(dropHandler, /files\.length > 0\) consume\(event, target, files\)/)
-  assert.match(source, /createConfigScope\(\)/)
+  assert.match(source, /ctx\.settingsScope\.bind\(\{ namespace: 'paste-to-path' \}\)/)
   assert.match(source, /settings\.plugin\.item/)
+  assert.match(source, /key: 'paste-to-path'/)
+  assert.match(source, /conversation\.input\.left/)
+  assert.match(source, /type: 'file'/)
   assert.match(source, /Reset to profile defaults/)
   assert.match(source, /\/paste-to-path\/config/)
+  assert.match(source, /\/paste-to-path\/from-path/)
+  assert.match(source, /\/paste-to-path\/windows-clipboard/)
   assert.match(host, /ctx\.settings\.register\('paste-to-path', Config/)
   assert.doesNotMatch(source, /createDraftImages|\/paste-to-path\/model-capability/)
   assert.doesNotMatch(source, /nativeImageExtensions|partitionFiles|NATIVE_IMAGE|isNativeImage/)
-  assert.doesNotMatch(source, /createBridgeScope|SETTINGS_BRIDGE|settings bridge|settingsScope\.bind/)
-  assert.doesNotMatch(host, /nativeImageExtensions|\/paste-to-path\/settings\/(?:describe|mutate)/)
+  assert.doesNotMatch(source, /createConfigScope|\/paste-to-path\/settings/)
+  assert.doesNotMatch(host, /nativeImageExtensions|\/paste-to-path\/settings/)
 })
 
-test('serves live settings through a loopback settings surface and safe configuration fallback', async () => {
+test('serves live effective configuration while official settings owns writes', async () => {
   const routes = harness({ longTextThreshold: 1200 })
   const initial = await call(routes.get('/paste-to-path/config'), request('GET'))
   assert.equal(initial.status, 200)
@@ -184,39 +198,38 @@ test('serves live settings through a loopback settings surface and safe configur
     longTextThreshold: 1200,
     maxBytes: 25 * 1024 * 1024,
     editableTextMaxBytes: 1024 * 1024,
+    pathTextAsAttachment: true,
+    windowsClipboardFallback: true,
   })
 
   routes.updateSettings({ longTextAsAttachment: false, maxBytes: 4 })
   const updated = await call(routes.get('/paste-to-path/config'), request('GET'))
   assert.equal(updated.body.longTextAsAttachment, false)
   assert.equal(updated.body.maxBytes, 4)
+  assert.equal(routes.has('/paste-to-path/settings'), false)
+})
 
-  const settings = await call(routes.get('/paste-to-path/settings'), request('GET'))
-  assert.equal(settings.status, 200)
-  assert.equal(settings.body.value.maxBytes, 4)
-  assert.equal(settings.body.writable, true)
+test('normalizes file URLs and rejects relative clipboard paths', () => {
+  assert.equal(normalizePastedPath('"file:///tmp/report%20one.pdf"'), fileURLToPath('file:///tmp/report%20one.pdf'))
+  assert.throws(() => normalizePastedPath('report.pdf'), /must be absolute/)
+})
 
-  const changed = await call(
-    routes.get('/paste-to-path/settings'),
-    request(
-      'PATCH',
-      { 'content-type': 'application/json' },
-      [Buffer.from(JSON.stringify({ field: 'longTextThreshold', value: 2400 }))],
-    ),
-  )
-  assert.equal(changed.status, 200)
-  assert.equal(changed.body.value.longTextThreshold, 2400)
+test('never exposes the Windows Host clipboard through a remote request', async () => {
+  const routes = harness()
+  const remote = request('POST', { 'x-session-id': 'session-test' })
+  remote.socket = { remoteAddress: '100.64.0.2' }
+  const result = await call(routes.get('/paste-to-path/windows-clipboard'), remote)
+  assert.equal(result.status, 403)
+  assert.equal(result.body.error, 'Windows clipboard access requires direct localhost')
 
-  const reset = await call(routes.get('/paste-to-path/settings'), request('DELETE'))
-  assert.equal(reset.status, 200)
-  assert.equal(reset.body.value.longTextThreshold, 1200)
-  assert.equal(reset.body.value.maxBytes, 25 * 1024 * 1024)
-
-  const remoteRequest = request('GET')
-  remoteRequest.socket = { remoteAddress: '10.0.0.4' }
-  const blocked = await call(routes.get('/paste-to-path/settings'), remoteRequest)
-  assert.equal(blocked.status, 403)
-  assert.equal(blocked.body.error, 'local settings access only')
+  const proxied = request('POST', {
+    host: 'johnnymacbook-pro.example.ts.net',
+    origin: 'https://johnnymacbook-pro.example.ts.net',
+    'x-session-id': 'session-test',
+  })
+  const proxiedResult = await call(routes.get('/paste-to-path/windows-clipboard'), proxied)
+  assert.equal(proxiedResult.status, 403)
+  assert.equal(proxiedResult.body.error, 'Windows clipboard access requires direct localhost')
 })
 
 test('uploads into the workspace, exposes editable text, and permits clearing it', async (t) => {
@@ -262,6 +275,55 @@ test('uploads into the workspace, exposes editable text, and permits clearing it
   assert.equal(cleared.status, 200)
   assert.equal(cleared.body.bytes, 0)
   assert.equal(await readFile(upload.body.path, 'utf8'), '')
+})
+
+test('links an existing Host file without copying it or granting edit access', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'dsh-paste-to-path-link-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const source = join(root, 'existing report.pdf')
+  await writeFile(source, Buffer.from('pdf bytes'))
+  const routes = harness()
+  const linked = await call(
+    routes.get('/paste-to-path/from-path'),
+    request(
+      'POST',
+      { 'x-session-id': 'session-test', 'content-type': 'application/json' },
+      [Buffer.from(JSON.stringify({ path: source }))],
+    ),
+  )
+  assert.equal(linked.status, 200)
+  assert.equal(linked.body.path, await realpath(source))
+  assert.equal(linked.body.category, 'docs')
+  assert.equal(linked.body.editable, false)
+  assert.equal(linked.body.linked, true)
+
+  const edit = await call(
+    routes.get('/paste-to-path/content'),
+    request('GET', {
+      'x-session-id': 'session-test',
+      'x-attachment-id': linked.body.id,
+    }),
+  )
+  assert.equal(edit.status, 409)
+})
+
+test('accepts an empty file instead of leaking it into the native image intake', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'dsh-paste-to-path-empty-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const routes = harness()
+  const uploaded = await call(
+    routes.get('/paste-to-path'),
+    request('POST', {
+      'x-session-id': 'session-test',
+      'x-workspace': encodeURIComponent(root),
+      'x-file-name': 'empty.zip',
+      'content-type': 'application/zip',
+      'content-length': '0',
+    }),
+  )
+  assert.equal(uploaded.status, 200)
+  assert.equal(uploaded.body.bytes, 0)
+  assert.equal(uploaded.body.category, 'archive')
 })
 
 test('rejects cross-session edit and applies live size-limit settings to uploads', async (t) => {

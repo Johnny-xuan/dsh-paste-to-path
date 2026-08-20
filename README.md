@@ -2,19 +2,19 @@
 
 > **A universal attachment dock for DSH.**
 
-English | [简体中文](./README.zh.md)
+English | [简体中文](https://github.com/Johnny-xuan/dsh-paste-to-path/blob/main/docs/README.zh.md)
 
 `dsh-paste-to-path` adds a general-purpose attachment Dock to the DSH Web composer.
 
-Paste or drop images, PDFs, Word and Excel documents, archives, code, logs, and other files, then review and manage them together before sending.
+Paste, drop, or choose images, PDFs, Word and Excel documents, archives, code, logs, and other files, then review and manage them together before sending.
 
 <p align="center">
-  <img src="./assets/demo.png" alt="dsh-paste-to-path attachment dock" width="100%">
+  <img src="https://raw.githubusercontent.com/Johnny-xuan/dsh-paste-to-path/main/assets/demo.png" alt="dsh-paste-to-path attachment dock" width="100%">
 </p>
 
 <p align="center"><em>Images, PDFs, archives, and other formats share one attachment Dock.</em></p>
 
-The DSH `0.1.0-rc.6` Web composer natively accepts PNG, JPEG, WebP, and GIF. PDFs, Office documents, archives, and other formats do not currently have the same unified attachment entry point. Even an image may fail when the selected model does not support image input or the active adapter is text-only.
+The DSH `0.1.0-rc.7` / `0.1.0-rc.8` Web composer natively accepts PNG, JPEG, WebP, and GIF. PDFs, Office documents, archives, and other formats do not have the same unified attachment entry point. Even an image may fail when the selected model does not support image input or the active adapter is text-only.
 
 `dsh-paste-to-path` does not extend the model's native content types. It takes a simpler route:
 
@@ -39,7 +39,7 @@ The plugin owns **attachment intake, management, and path delivery**. Your Agent
 ## Path flow at a glance
 
 <p align="center">
-  <img src="./assets/dsh-paste-to-path-poster-4k.png" alt="How dsh-paste-to-path works" width="100%">
+  <img src="https://raw.githubusercontent.com/Johnny-xuan/dsh-paste-to-path/main/assets/dsh-paste-to-path-poster-4k.png" alt="How dsh-paste-to-path works" width="100%">
 </p>
 
 <p align="center"><em>The file is saved on the DSH Host, then its path is given to the Agent.</em></p>
@@ -50,11 +50,19 @@ The plugin owns **attachment intake, management, and path delivery**. Your Agent
 
 ### Universal attachment Dock
 
-Paste or drop a file and an attachment card appears above the composer.
+Paste, drop, or choose a file and an attachment card appears above the composer. The plugin's paperclip button accepts any file type and routes it through this Dock rather than DSH's native image rail.
 
 Each card shows the file name, size, category, and path. You can remove it before sending.
 
 Images also have thumbnails and lightbox previews.
+
+---
+
+### File-manager clipboard support
+
+The plugin catches every real `File` object exposed by the browser, including empty files. It can also turn a pasted `file:` URI or absolute path into a card when that path already exists on the DSH Host.
+
+Browsers do not consistently expose non-image files copied from Windows Explorer, Finder, or Linux file managers. If the paste event contains neither file bytes nor a usable Host path, an ordinary web page cannot reconstruct the hidden OS clipboard entry. To address [Issue #2](https://github.com/Johnny-xuan/dsh-paste-to-path/issues/2), the plugin reads Explorer's `FileDropList` at this point when DSH runs on a local Windows Host through a direct `localhost` connection; remote clients never access the Host clipboard. In other cases, use the plugin's paperclip button or drag and drop. A path from a remote browser's device is not a path on the DSH Host.
 
 ---
 
@@ -102,7 +110,7 @@ Install into a DSH Web profile:
 dsh plugin --profile web add dsh-paste-to-path
 ```
 
-Before the npm release, you can also install directly from GitHub:
+You can also install the current GitHub branch directly:
 
 ```bash
 dsh plugin --profile web add github:Johnny-xuan/dsh-paste-to-path
@@ -120,13 +128,15 @@ The package includes a `dsh.bundle` manifest, so the required loader patch is lo
 
 ## How it works
 
-When you paste or drop a file into the composer, the plugin catches it and saves it on the DSH Host:
+When you paste, drop, or choose a file, the plugin catches it and saves a private copy on the DSH Host:
 
 ```text
 <workspace>/.dsh/pastes/<category>/
 ```
 
 The composer does not contain the file's contents. It keeps an attachment reference instead.
+
+If you paste an absolute path that already exists on the DSH Host, the plugin links that existing file instead of copying it. Linked files are never editable from the Dock.
 
 When you send the message, DSH's reference codec expands that reference into a short path instruction:
 
@@ -157,7 +167,9 @@ Uses an available tool to read it
 The implementation uses DSH's extension mechanisms:
 
 - `conversation.input.dock`
+- `conversation.input.left`
 - input-trigger reference codec
+- `settingsScope`
 
 No DSH core modification is required.
 
@@ -211,7 +223,7 @@ If the Agent has no suitable tool, the file still enters the Dock and is saved o
 
 In DSH's native attachment path, supported file formats and model capabilities are closely related.
 
-In `0.1.0-rc.6`, the Web composer currently accepts:
+In DSH `0.1.0-rc.7` / `0.1.0-rc.8`, the native Web image intake accepts:
 
 - PNG
 - JPEG
@@ -251,6 +263,8 @@ Default configuration is provided by `cordis.patch.yml`:
       config:
         longTextAsAttachment: true
         longTextThreshold: 8000
+        pathTextAsAttachment: true
+        windowsClipboardFallback: true
         maxBytes: 26214400
         editableTextMaxBytes: 1048576
 ```
@@ -259,10 +273,12 @@ Default configuration is provided by `cordis.patch.yml`:
 | --- | --- | --- |
 | `longTextAsAttachment` | `true` | Save long pasted text as a `.txt` attachment |
 | `longTextThreshold` | `8000` | Character threshold for long-text conversion |
+| `pathTextAsAttachment` | `true` | Link pasted absolute paths that exist on the DSH Host |
+| `windowsClipboardFallback` | `true` | Read Explorer's FileDropList on a direct localhost Windows Host when the browser hides file bytes |
 | `maxBytes` | 25 MiB | Maximum size of one attachment |
 | `editableTextMaxBytes` | 1 MiB | Maximum text-file size editable in the Dock |
 
-On a local DSH Web deployment, these values are also available under **Settings → Plugins → Paste to Path**. Changes are persisted through DSH settings and apply without restarting the plugin. The reset button returns all four values to the profile defaults shown above.
+On a local DSH Web deployment, these values are also available under **Settings → Plugins → Paste to Path**. Version `0.0.2` uses DSH's official third-party settings scope; changes are persisted through DSH settings and apply without restarting the plugin. The reset button returns all six values to the profile defaults shown above.
 
 The attachment Dock, notifications, and settings card follow DSH's **Language** preference and include English and Simplified Chinese. The path instructions serialized for the Agent remain stable English protocol text and do not change with the UI language.
 
@@ -284,11 +300,13 @@ Without a workspace, storage falls back to:
 $DSH_HOME/tmp-paste/<category>/
 ```
 
-File permissions are:
+Files copied into plugin storage use permissions:
 
 ```text
 0600
 ```
+
+An existing Host path pasted as an attachment is linked in place. The plugin does not copy it, change its permissions, or allow Dock editing of the original file.
 
 Removing an attachment from the Dock removes only its reference from the current draft. It does not delete the file from disk.
 
@@ -298,7 +316,7 @@ The path therefore remains valid for undo, re-send, or later reference.
 
 ## Privacy
 
-Files are uploaded from the browser to your own DSH Host and saved on the Host's local filesystem.
+Files chosen, dropped, or exposed as browser `File` objects are uploaded to your own DSH Host and saved on its local filesystem. Existing Host paths are only linked in place.
 
 The plugin itself does not:
 
@@ -348,10 +366,13 @@ The plugin therefore does not:
 
 ## Compatibility
 
-Tested with:
+Version `0.0.2` is tested with:
 
 ```text
-DeepSeek Harness 0.1.0-rc.6
+DeepSeek Harness 0.1.0-rc.7
+DeepSeek Harness 0.1.0-rc.8
 ```
+
+Use plugin `0.0.1` if you must remain on DSH `0.1.0-rc.6`; its settings card uses the older compatibility bridge. Version `0.0.2` requires DSH `>=0.1.0-rc.7 <0.2.0` and uses the official third-party settings API.
 
 DSH is currently a developer preview. Changes to its extension interfaces may require a corresponding plugin update.

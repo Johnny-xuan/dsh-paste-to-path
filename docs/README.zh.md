@@ -2,19 +2,19 @@
 
 > **A universal attachment dock for DSH.**
 
-[English](./README.md) | 简体中文
+[English](../README.md) | 简体中文
 
 `dsh-paste-to-path` 给 DSH Web composer 增加了一个通用附件 Dock。
 
-你可以直接拖入或粘贴图片、PDF、Word、Excel、压缩包、代码、日志以及其他文件，在发送前统一查看和管理它们。
+你可以直接粘贴、拖入或选择图片、PDF、Word、Excel、压缩包、代码、日志以及其他文件，在发送前统一查看和管理它们。
 
 <p align="center">
-  <img src="./assets/demo.png" alt="dsh-paste-to-path attachment dock" width="100%">
+  <img src="https://raw.githubusercontent.com/Johnny-xuan/dsh-paste-to-path/main/assets/demo.png" alt="dsh-paste-to-path attachment dock" width="100%">
 </p>
 
 <p align="center"><em>图片、PDF、压缩包等不同格式，都可以放进同一个附件 Dock。</em></p>
 
-DSH `0.1.0-rc.6` 的 Web composer 原生接收 PNG、JPEG、WebP 和 GIF。PDF、Office 文档、压缩包以及其他格式目前没有对应的统一附件入口；即使是图片，在不支持图像输入的模型或 text-only adapter 下，也可能无法直接发送。
+DSH `0.1.0-rc.7` / `0.1.0-rc.8` 的 Web composer 原生接收 PNG、JPEG、WebP 和 GIF。PDF、Office 文档、压缩包以及其他格式没有对应的统一附件入口；即使是图片，在不支持图像输入的模型或 text-only adapter 下，也可能无法直接发送。
 
 `dsh-paste-to-path` 不去扩展模型原生的 content 类型，而是走另一条更简单的路径：
 
@@ -39,7 +39,7 @@ Agent
 ## 路径流程概览
 
 <p align="center">
-  <img src="./assets/dsh-paste-to-path-poster-4k.png" alt="dsh-paste-to-path 工作方式" width="100%">
+  <img src="https://raw.githubusercontent.com/Johnny-xuan/dsh-paste-to-path/main/assets/dsh-paste-to-path-poster-4k.png" alt="dsh-paste-to-path 工作方式" width="100%">
 </p>
 
 <p align="center"><em>文件先保存到 DSH Host，再把路径交给 Agent。</em></p>
@@ -50,11 +50,19 @@ Agent
 
 ### 通用附件 Dock
 
-拖入或粘贴文件后，输入框上方会出现对应的附件卡片。
+粘贴、拖入或选择文件后，输入框上方会出现对应的附件卡片。插件提供的回形针按钮接受任意格式，不进入 DSH 原生的图片专用附件栏。
 
 每张卡片会显示文件名、大小、类型和路径，并且可以在发送前移除。
 
 图片还支持缩略图和灯箱预览。
+
+---
+
+### 文件管理器剪贴板支持
+
+只要浏览器确实提供了 `File` 对象，插件就会接住它，包括空文件。浏览器如果提供 `file:` URI 或绝对路径，并且该路径确实存在于 DSH Host，插件也可以直接把它变成附件卡片。
+
+Windows Explorer、Finder 和 Linux 文件管理器复制非图片文件时，不同浏览器暴露的剪贴板内容并不一致。如果粘贴事件既没有文件字节，也没有可用的 Host 路径，普通网页无法从被浏览器隐藏的系统剪贴板格式中恢复文件。为处理 [Issue #2](https://github.com/Johnny-xuan/dsh-paste-to-path/issues/2)，本机 Windows Host 通过直接 `localhost` 使用时，插件会在这一步读取 Explorer 的 `FileDropList`；远程连接不会访问 Host 剪贴板。其他情况下请使用插件自己的回形针按钮或拖放。
 
 ---
 
@@ -102,7 +110,7 @@ Agent
 dsh plugin --profile web add dsh-paste-to-path
 ```
 
-npm 正式发布前，也可以直接从 GitHub 安装：
+也可以直接安装 GitHub 当前分支：
 
 ```bash
 dsh plugin --profile web add github:Johnny-xuan/dsh-paste-to-path
@@ -120,13 +128,15 @@ dsh web
 
 ## 它是怎么工作的
 
-当你把文件拖进或粘贴到输入框时，插件会先接住这个文件并保存到 DSH Host：
+当你粘贴、拖入或选择文件时，插件会先接住这个文件并在 DSH Host 保存一份私有副本：
 
 ```text
 <workspace>/.dsh/pastes/<分类>/
 ```
 
 输入框中不会直接塞入文件内容，而是保留一个附件引用。
+
+如果粘贴的是已经存在于 DSH Host 的绝对路径，插件会直接引用原文件，不再复制；这类路径附件不能在 Dock 中编辑原文件。
 
 发送消息时，DSH 的 reference codec 会把这个引用展开成一段简短的路径说明：
 
@@ -157,7 +167,9 @@ Agent 收到路径
 整个过程使用 DSH 自己提供的扩展机制：
 
 - `conversation.input.dock`
+- `conversation.input.left`
 - input-trigger reference codec
+- `settingsScope`
 
 不需要修改 DSH 核心代码。
 
@@ -211,7 +223,7 @@ Inspect it using an available image-reading method.
 
 DSH 原生附件链路里，文件格式和模型能力通常绑得比较紧。
 
-以 `0.1.0-rc.6` 为例，Web composer 当前接收：
+在 DSH `0.1.0-rc.7` / `0.1.0-rc.8` 中，原生 Web 图片入口接收：
 
 - PNG
 - JPEG
@@ -251,6 +263,8 @@ DSH 原生附件链路里，文件格式和模型能力通常绑得比较紧。
       config:
         longTextAsAttachment: true
         longTextThreshold: 8000
+        pathTextAsAttachment: true
+        windowsClipboardFallback: true
         maxBytes: 26214400
         editableTextMaxBytes: 1048576
 ```
@@ -259,10 +273,12 @@ DSH 原生附件链路里，文件格式和模型能力通常绑得比较紧。
 | ---------------------- | ------ | --------------------- |
 | `longTextAsAttachment` | `true` | 是否把长文本保存为 `.txt` 附件   |
 | `longTextThreshold`    | `8000` | 长文本触发阈值，单位为字符         |
+| `pathTextAsAttachment` | `true` | 把确实存在于 DSH Host 的绝对路径变成附件 |
+| `windowsClipboardFallback` | `true` | 浏览器隐藏文件字节时，仅在 Windows Host 的直接 localhost 连接读取 Explorer FileDropList |
 | `maxBytes`             | 25 MiB | 单个附件最大大小              |
 | `editableTextMaxBytes` | 1 MiB  | Dock 中允许直接编辑的最大文本文件大小 |
 
-本机运行 DSH Web 时，也可以在 **Settings → Plugins → Paste to Path** 中直接修改这些配置。变更通过 DSH settings 持久化并实时生效；重置按钮会把四项配置恢复为上方 profile 中的默认值。
+本机运行 DSH Web 时，也可以在 **Settings → Plugins → Paste to Path** 中直接修改这些配置。`0.0.2` 使用 DSH 官方第三方 settings scope，变更通过 DSH settings 持久化并实时生效；重置按钮会把六项配置恢复为上方 profile 中的默认值。
 
 附件 Dock、操作提示和设置卡会跟随 DSH 的 **Language** 设置，目前提供英文和简体中文。发送给 Agent 的路径说明仍保持为稳定的英文协议文本，不会跟随界面语言变化。
 
@@ -284,11 +300,13 @@ DSH 原生附件链路里，文件格式和模型能力通常绑得比较紧。
 $DSH_HOME/tmp-paste/<分类>/
 ```
 
-文件权限为：
+复制到插件存储目录的文件权限为：
 
 ```text
 0600
 ```
+
+把已经存在于 Host 的路径粘贴成附件时，插件只原地引用：不会复制文件、修改其权限，也不会允许 Dock 编辑原文件。
 
 从 Dock 中移除一个附件，只会移除当前草稿里的引用，不会删除磁盘上的文件。
 
@@ -298,7 +316,7 @@ $DSH_HOME/tmp-paste/<分类>/
 
 ## 隐私
 
-文件会从浏览器上传到你自己的 DSH Host，并保存在 Host 的本地文件系统中。
+通过选择、拖放或浏览器 `File` 对象进入的文件会上传到你自己的 DSH Host，并保存在 Host 的本地文件系统中；已经存在的 Host 路径只会被原地引用。
 
 插件本身不会：
 
@@ -348,10 +366,13 @@ Vision / PDF Reader / OCR / Shell / ...
 
 ## 兼容性
 
-目前已在以下版本验证：
+`0.0.2` 已在以下版本验证：
 
 ```text
-DeepSeek Harness 0.1.0-rc.6
+DeepSeek Harness 0.1.0-rc.7
+DeepSeek Harness 0.1.0-rc.8
 ```
+
+如果必须继续使用 DSH `0.1.0-rc.6`，请保留插件 `0.0.1`，它的设置卡使用旧版兼容桥。插件 `0.0.2` 要求 DSH `>=0.1.0-rc.7 <0.2.0`，并改用官方第三方设置 API。
 
 DSH 当前仍处于 developer preview。后续版本如果调整相关扩展接口，插件可能需要同步适配。

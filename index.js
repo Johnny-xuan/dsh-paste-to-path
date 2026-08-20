@@ -4,9 +4,11 @@
 // content. The browser keeps only an opaque reference plus an absolute path.
 
 import { randomBytes, randomUUID } from 'node:crypto'
+import { execFile } from 'node:child_process'
 import { mkdir, readFile, realpath, stat, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { basename, extname, isAbsolute, join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import z from '@deepseek-ai/schemastery'
 
 export const name = 'dsh-paste-to-path'
@@ -17,6 +19,8 @@ const DEFAULTS = Object.freeze({
   longTextThreshold: 8000,
   maxBytes: 25 * 1024 * 1024,
   editableTextMaxBytes: 1024 * 1024,
+  pathTextAsAttachment: true,
+  windowsClipboardFallback: true,
 })
 
 export const Config = z.object({
@@ -24,6 +28,8 @@ export const Config = z.object({
   longTextThreshold: z.natural().min(1).default(DEFAULTS.longTextThreshold),
   maxBytes: z.natural().min(1).default(DEFAULTS.maxBytes),
   editableTextMaxBytes: z.natural().min(1).default(DEFAULTS.editableTextMaxBytes),
+  pathTextAsAttachment: z.boolean().default(DEFAULTS.pathTextAsAttachment),
+  windowsClipboardFallback: z.boolean().default(DEFAULTS.windowsClipboardFallback),
   dir: z.string(),
 })
 
@@ -65,6 +71,8 @@ export function resolveConfig(config = {}) {
     longTextThreshold: positiveInteger(config.longTextThreshold, DEFAULTS.longTextThreshold),
     maxBytes: positiveInteger(config.maxBytes, DEFAULTS.maxBytes),
     editableTextMaxBytes: positiveInteger(config.editableTextMaxBytes, DEFAULTS.editableTextMaxBytes),
+    pathTextAsAttachment: config.pathTextAsAttachment !== false,
+    windowsClipboardFallback: config.windowsClipboardFallback !== false,
   }
   if (typeof config.dir === 'string') resolved.dir = config.dir
   return resolved
@@ -185,21 +193,78 @@ function attachmentFor(registry, req) {
   return attachment
 }
 
-const SETTINGS_FIELDS = new Set([
-  'longTextAsAttachment',
-  'longTextThreshold',
-  'maxBytes',
-  'editableTextMaxBytes',
-])
+async function readJson(req, maxBytes = 16 * 1024) {
+  const buffer = await readBody(req, maxBytes)
+  try {
+    return JSON.parse(buffer.toString('utf8'))
+  } catch {
+    throw new RequestError(400, 'invalid JSON body')
+  }
+}
 
-function isLoopbackSettingsRequest(req) {
+export function normalizePastedPath(value) {
+  let candidate = String(value ?? '').trim()
+  if (candidate.length >= 2) {
+    const quote = candidate[0]
+    if ((quote === '"' || quote === "'") && candidate.at(-1) === quote) candidate = candidate.slice(1, -1).trim()
+  }
+  if (candidate === '' || candidate.length > 4096 || candidate.includes('\0')) {
+    throw new RequestError(400, 'invalid local path')
+  }
+  if (/^file:/i.test(candidate)) {
+    try {
+      candidate = fileURLToPath(candidate)
+    } catch {
+      throw new RequestError(400, 'invalid file URL')
+    }
+  }
+  if (!isAbsolute(candidate)) throw new RequestError(400, 'local path must be absolute on the DSH Host')
+  return candidate
+}
+
+async function registerExistingPath(registry, sessionId, value) {
+  const requested = normalizePastedPath(value)
+  let path
+  let metadata
+  try {
+    path = await realpath(requested)
+    metadata = await stat(path)
+  } catch {
+    throw new RequestError(404, 'local path does not exist on the DSH Host')
+  }
+  if (!metadata.isFile()) throw new RequestError(400, 'local path must name a regular file')
+  const name = safeFileName(basename(path))
+  const category = categoryOf(name)
+  const id = randomUUID()
+  const attachment = {
+    id,
+    sessionId,
+    path,
+    name,
+    category,
+    mediaType: '',
+    bytes: metadata.size,
+    editable: false,
+    linked: true,
+  }
+  registry.set(id, attachment)
+  return attachment
+}
+
+function isDirectLoopbackRequest(req) {
   const address = req.socket?.remoteAddress
   if (address !== '127.0.0.1' && address !== '::1' && address !== '::ffff:127.0.0.1') return false
-  if (req.headers['sec-fetch-site'] === 'cross-site') return false
-  const origin = firstHeader(req.headers.origin)
-  if (origin === '') return true
   const host = firstHeader(req.headers.host)
   if (host === '') return false
+  let hostname
+  try {
+    hostname = new URL(`http://${host}`).hostname.toLowerCase()
+  } catch {
+    return false
+  }
+  if (hostname !== 'localhost' && hostname !== '127.0.0.1' && hostname !== '[::1]') return false
+  const origin = firstHeader(req.headers.origin)
+  if (origin === '') return true
   try {
     return new URL(origin).host === new URL(`http://${host}`).host
   } catch {
@@ -207,13 +272,40 @@ function isLoopbackSettingsRequest(req) {
   }
 }
 
-async function readJson(req) {
-  const buffer = await readBody(req, 16 * 1024)
-  try {
-    return JSON.parse(buffer.toString('utf8'))
-  } catch {
-    throw new RequestError(400, 'invalid JSON body')
-  }
+const WINDOWS_FILE_DROP_SCRIPT = String.raw`
+$ErrorActionPreference = 'Stop'
+Add-Type -AssemblyName System.Windows.Forms
+$utf8 = New-Object System.Text.UTF8Encoding($false)
+[Console]::OutputEncoding = $utf8
+$OutputEncoding = $utf8
+$paths = @([System.Windows.Forms.Clipboard]::GetFileDropList())
+ConvertTo-Json -Compress -InputObject $paths
+`.trim()
+
+export function readWindowsFileClipboard() {
+  if (process.platform !== 'win32') throw new RequestError(501, 'Windows file clipboard is unavailable on this Host')
+  return new Promise((resolvePromise, rejectPromise) => {
+    execFile(
+      'powershell.exe',
+      ['-NoLogo', '-NoProfile', '-NonInteractive', '-STA', '-Command', WINDOWS_FILE_DROP_SCRIPT],
+      { encoding: 'utf8', maxBuffer: 64 * 1024, timeout: 5000, windowsHide: true },
+      (error, stdout) => {
+        if (error) {
+          rejectPromise(new RequestError(502, 'could not read the Windows file clipboard'))
+          return
+        }
+        try {
+          const parsed = JSON.parse(stdout.trim() || '[]')
+          const paths = Array.isArray(parsed) ? parsed : [parsed]
+          const filtered = paths.filter((value) => typeof value === 'string' && value.trim() !== '').slice(0, 32)
+          if (filtered.length === 0) throw new RequestError(404, 'Windows file clipboard is empty')
+          resolvePromise(filtered)
+        } catch (parseError) {
+          rejectPromise(parseError instanceof RequestError ? parseError : new RequestError(502, 'invalid Windows clipboard response'))
+        }
+      },
+    )
+  })
 }
 
 export function apply(ctx, rawConfig = {}) {
@@ -238,34 +330,46 @@ export function apply(ctx, rawConfig = {}) {
           longTextThreshold: config.longTextThreshold,
           maxBytes: config.maxBytes,
           editableTextMaxBytes: config.editableTextMaxBytes,
+          pathTextAsAttachment: config.pathTextAsAttachment,
+          windowsClipboardFallback: config.windowsClipboardFallback,
         })
       },
     },
     {
-      name: 'paste-to-path-settings',
+      name: 'paste-to-path-windows-clipboard',
       kind: 'exact',
-      path: '/paste-to-path/settings',
+      path: '/paste-to-path/windows-clipboard',
       handler: async (req, res) => {
         try {
-          if (!isLoopbackSettingsRequest(req)) throw new RequestError(403, 'local settings access only')
-          if (req.method === 'GET') {
-            return json(res, 200, { value: config, base: entryConfig, writable: ctx.settings.writable !== false })
+          if (req.method !== 'POST') return json(res, 405, { error: 'method not allowed' }, { allow: 'POST' })
+          if (!config.windowsClipboardFallback) throw new RequestError(403, 'Windows clipboard fallback is disabled')
+          if (!isDirectLoopbackRequest(req)) throw new RequestError(403, 'Windows clipboard access requires direct localhost')
+          const sessionId = decodedHeader(req, 'x-session-id')
+          if (sessionId === '') throw new RequestError(400, 'x-session-id is required')
+          const paths = await readWindowsFileClipboard()
+          const attachments = []
+          for (const path of paths) attachments.push(await registerExistingPath(registry, sessionId, path))
+          return json(res, 200, { attachments })
+        } catch (error) {
+          const status = error instanceof RequestError ? error.status : 500
+          return json(res, status, { error: String(error?.message ?? error) })
+        }
+      },
+    },
+    {
+      name: 'paste-to-path-from-path',
+      kind: 'exact',
+      path: '/paste-to-path/from-path',
+      handler: async (req, res) => {
+        try {
+          if (req.method !== 'POST') return json(res, 405, { error: 'method not allowed' }, { allow: 'POST' })
+          const sessionId = decodedHeader(req, 'x-session-id')
+          if (sessionId === '') throw new RequestError(400, 'x-session-id is required')
+          const body = await readJson(req)
+          if (body === null || typeof body !== 'object' || typeof body.path !== 'string') {
+            throw new RequestError(400, 'path is required')
           }
-          if (req.method === 'PATCH') {
-            const body = await readJson(req)
-            if (body === null || typeof body !== 'object' || !SETTINGS_FIELDS.has(body.field)) {
-              throw new RequestError(400, 'unknown settings field')
-            }
-            await settingsScope.update({ [body.field]: body.value })
-            config = resolveConfig(settingsScope.get())
-            return json(res, 200, { value: config, base: entryConfig, writable: ctx.settings.writable !== false })
-          }
-          if (req.method === 'DELETE') {
-            await settingsScope.replace({})
-            config = resolveConfig(settingsScope.get())
-            return json(res, 200, { value: config, base: entryConfig, writable: ctx.settings.writable !== false })
-          }
-          return json(res, 405, { error: 'method not allowed' }, { allow: 'GET, PATCH, DELETE' })
+          return json(res, 200, await registerExistingPath(registry, sessionId, body.path))
         } catch (error) {
           const status = error instanceof RequestError ? error.status : 500
           return json(res, status, { error: String(error?.message ?? error) })
@@ -309,7 +413,7 @@ export function apply(ctx, rawConfig = {}) {
           const fileName = decodedHeader(req, 'x-file-name')
           const workspace = decodedHeader(req, 'x-workspace')
           const mediaType = normalizedMediaType(firstHeader(req.headers['content-type']))
-          const buffer = await readBody(req, config.maxBytes)
+          const buffer = await readBody(req, config.maxBytes, true)
           const category = categoryOf(fileName, mediaType)
           const root = await storageRoot(workspace, config.dir ?? defaultFallbackDir)
           const displayName = safeFileName(fileName, mediaType)

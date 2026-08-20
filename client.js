@@ -24,10 +24,11 @@ window.__ModuleLoader__.load({
       longTextThreshold: 8000,
       maxBytes: 25 * 1024 * 1024,
       editableTextMaxBytes: 1024 * 1024,
+      pathTextAsAttachment: true,
+      windowsClipboardFallback: true,
     })
     var config = { ...DEFAULT_CONFIG }
     var configScope = null
-    var settingsReady = false
     var localeTranslate = null
     var LOCALE_NS = 'paste-to-path'
     var zh = Object.freeze({
@@ -37,6 +38,9 @@ window.__ModuleLoader__.load({
       'processing.failed': '附件处理失败：{reason}',
       'request.failed': '操作失败：{reason}',
       'attachment.saved': '附件已保存：{name}',
+      'attachment.choose': '选择附件',
+      'attachment.chooseTitle': '从设备选择任意格式的附件',
+      'clipboard.unavailable': '浏览器没有提供这个文件。请使用回形针按钮选择文件，或将文件拖入输入框。',
       'preview.title': '预览 {name}',
       'preview.close': '关闭图片预览',
       'action.collapse': '收起',
@@ -63,6 +67,10 @@ window.__ModuleLoader__.load({
       'settings.title': '粘贴到路径',
       'settings.description': '管理路径附件的大小限制和长文本行为。',
       'settings.longText': '将长文本粘贴转换为附件',
+      'settings.pathText': '将本机绝对路径粘贴转换为附件',
+      'settings.pathTextHint': '仅当该路径确实存在于 DSH Host 时生效；远程浏览器中的设备路径不会映射到 Host。',
+      'settings.windowsClipboard': '本机 Windows Explorer 剪贴板后备',
+      'settings.windowsClipboardHint': '仅在直接 localhost 连接中读取 Windows FileDropList；远程连接不会访问 Host 剪贴板。',
       'settings.threshold': '长文本阈值（字符）',
       'settings.thresholdHint': '达到此长度的文本会保存为 .txt 附件。',
       'settings.maxBytes': '单个附件大小上限（字节）',
@@ -77,6 +85,9 @@ window.__ModuleLoader__.load({
       'processing.failed': 'Attachment processing failed: {reason}',
       'request.failed': 'Operation failed: {reason}',
       'attachment.saved': 'Attachment saved: {name}',
+      'attachment.choose': 'Choose attachments',
+      'attachment.chooseTitle': 'Choose attachments of any file type from this device',
+      'clipboard.unavailable': 'The browser did not expose this file. Use the paperclip button or drag the file into the composer.',
       'preview.title': 'Preview {name}',
       'preview.close': 'Close image preview',
       'action.collapse': 'Collapse',
@@ -103,6 +114,10 @@ window.__ModuleLoader__.load({
       'settings.title': 'Paste to Path',
       'settings.description': 'Manage path-backed attachment limits and long-text behavior.',
       'settings.longText': 'Turn long pasted text into an attachment',
+      'settings.pathText': 'Turn pasted absolute Host paths into attachments',
+      'settings.pathTextHint': 'Only applies when the path exists on the DSH Host; a remote browser device path does not map to the Host.',
+      'settings.windowsClipboard': 'Local Windows Explorer clipboard fallback',
+      'settings.windowsClipboardHint': 'Reads the Windows FileDropList only over a direct localhost connection; remote clients never access the Host clipboard.',
       'settings.threshold': 'Long-text threshold (characters)',
       'settings.thresholdHint': 'Text at or above this length is stored as a .txt attachment.',
       'settings.maxBytes': 'Maximum attachment size (bytes)',
@@ -118,91 +133,6 @@ window.__ModuleLoader__.load({
 
     function tr(key, params) {
       return localeTranslate ? localeTranslate(key, params) : fallbackTranslate(key, params)
-    }
-
-    function createSnapshot(initial) {
-      var value = initial
-      var subscribers = new Set()
-      return {
-        get: () => value,
-        subscribe(listener) {
-          subscribers.add(listener)
-          return () => subscribers.delete(listener)
-        },
-        set(next) {
-          value = next
-          for (var subscriber of subscribers) subscriber()
-        },
-      }
-    }
-
-    function createConfigScope() {
-      var snapshot = createSnapshot({
-        status: 'loading',
-        value: undefined,
-        base: undefined,
-        writable: false,
-      })
-      var tail = Promise.resolve()
-      var disposed = false
-
-      function enqueue(operation) {
-        if (disposed) return Promise.resolve()
-        var task = tail.then(() => (disposed ? undefined : operation()))
-        tail = task.catch(() => undefined)
-        return task
-      }
-
-      async function request(method, body) {
-        var response = await fetch('/paste-to-path/settings', {
-          method,
-          ...(body === undefined
-            ? {}
-            : { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }),
-        })
-        var payload = await response.json().catch(() => ({}))
-        if (!response.ok) throw new Error(payload.error || `settings request failed (${response.status})`)
-        return payload
-      }
-
-      function accept(payload) {
-        snapshot.set({
-          status: 'ready',
-          value: payload.value,
-          base: payload.base,
-          writable: payload.writable === true,
-        })
-      }
-
-      async function load() {
-        try {
-          accept(await request('GET'))
-        } catch {
-          snapshot.set({ ...snapshot.get(), status: 'unavailable', writable: false })
-        }
-      }
-
-      async function write(method, body) {
-        try {
-          accept(await request(method, body))
-        } catch (error) {
-          await load()
-          throw error
-        }
-      }
-
-      var scope = {
-        getSnapshot: () => snapshot.get(),
-        subscribe: (listener) => snapshot.subscribe(listener),
-        load: () => enqueue(load),
-        set: (field, value) => enqueue(() => write('PATCH', { field, value })),
-        reset: () => enqueue(() => write('DELETE')),
-        dispose() {
-          disposed = true
-        },
-      }
-      scope.load()
-      return scope
     }
 
     var css = `
@@ -244,6 +174,10 @@ window.__ModuleLoader__.load({
       .dsh-p2p-settings-check{display:flex;align-items:center;gap:7px;cursor:pointer}
       .dsh-p2p-settings-actions{display:flex;align-items:center;justify-content:flex-end;gap:8px;margin-top:14px;padding-top:12px;border-top:1px solid var(--dsw-alias-border-l2)}
       .dsh-p2p-settings-status{color:var(--dsw-alias-label-tertiary);font-size:12px}
+      .dsh-p2p-picker{appearance:none;border:0;background:transparent;color:var(--dsw-alias-label-secondary);height:28px;width:28px;padding:0;border-radius:7px;display:grid;place-items:center;cursor:pointer}
+      .dsh-p2p-picker:hover{background:var(--dsw-alias-interactive-bg-hover-solid);color:var(--dsw-alias-label-primary)}
+      .dsh-p2p-picker:disabled{opacity:.45;cursor:default}
+      .dsh-p2p-picker-input{display:none}
     `
 
     function sessionItems(sessionId) {
@@ -279,17 +213,65 @@ window.__ModuleLoader__.load({
       for (var i = 0; i < items.length; i++) {
         if (items[i].kind !== 'file') continue
         var file = items[i].getAsFile()
-        if (file && file.size > 0) files.push(file)
+        if (file) files.push(file)
       }
       if (files.length === 0 && data.files) {
-        files = Array.from(data.files).filter((file) => file && file.size > 0)
+        files = Array.from(data.files).filter(Boolean)
       }
       return files
     }
 
     function filesOfDrop(event) {
       var files = event.dataTransfer?.files
-      return files ? Array.from(files).filter((file) => file && file.size > 0) : []
+      return files ? Array.from(files).filter(Boolean) : []
+    }
+
+    function unquotePath(value) {
+      var candidate = value.trim()
+      if (candidate.length < 2) return candidate
+      var quote = candidate[0]
+      return (quote === '"' || quote === "'") && candidate[candidate.length - 1] === quote
+        ? candidate.slice(1, -1).trim()
+        : candidate
+    }
+
+    function looksLikeHostPath(value) {
+      return (
+        /^file:/i.test(value) ||
+        /^[a-z]:[\\/]/i.test(value) ||
+        /^\\\\[^\\]+\\[^\\]+/.test(value) ||
+        /^\/(?!\/)/.test(value)
+      )
+    }
+
+    function pathLines(value) {
+      return value
+        .split(/\r?\n/)
+        .map((line) => unquotePath(line))
+        .filter((line) => line !== '' && !line.startsWith('#'))
+    }
+
+    function pathsOfPaste(event) {
+      if (!config.pathTextAsAttachment) return null
+      var data = event.clipboardData
+      if (!data) return null
+      var uriList = data.getData('text/uri-list') || ''
+      if (uriList !== '') {
+        var uris = pathLines(uriList)
+        if (uris.length > 0 && uris.every(looksLikeHostPath)) return { paths: uris, text: data.getData('text/plain') || uriList }
+      }
+      var text = data.getData('text/plain') || ''
+      if (text === '') return null
+      var paths = pathLines(text)
+      if (paths.length === 0 || !paths.every(looksLikeHostPath)) return null
+      return { paths, text }
+    }
+
+    function signalsClipboardFiles(event) {
+      var data = event.clipboardData
+      if (!data) return false
+      if (Array.from(data.types || []).includes('Files')) return true
+      return Array.from(data.items || []).some((item) => item.kind === 'file')
     }
 
     function carriesFiles(event) {
@@ -396,6 +378,44 @@ window.__ModuleLoader__.load({
       )
     }
 
+    function linkHostPath(path, active) {
+      return fetch('/paste-to-path/from-path', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Session-Id': encodeURIComponent(active.sessionId),
+        },
+        body: JSON.stringify({ path }),
+      }).then((res) =>
+        res
+          .json()
+          .catch(() => ({}))
+          .then((body) => {
+            if (!res.ok) throw new Error(body.error || `path attachment failed (${res.status})`)
+            if (typeof body.id !== 'string' || typeof body.path !== 'string') {
+              throw new Error('path attachment returned an invalid attachment')
+            }
+            return body
+          }),
+      )
+    }
+
+    function readWindowsClipboard(active) {
+      return fetch('/paste-to-path/windows-clipboard', {
+        method: 'POST',
+        headers: { 'X-Session-Id': encodeURIComponent(active.sessionId) },
+      }).then((res) =>
+        res
+          .json()
+          .catch(() => ({}))
+          .then((body) => {
+            if (!res.ok) throw new Error(body.error || `Windows clipboard failed (${res.status})`)
+            if (!Array.isArray(body.attachments)) throw new Error('Windows clipboard returned invalid attachments')
+            return body.attachments
+          }),
+      )
+    }
+
     function modelText(item) {
       if (!item) throw new Error('paste-to-path attachment is no longer available')
       if (item.category === 'images') {
@@ -491,6 +511,23 @@ window.__ModuleLoader__.load({
       })
     }
 
+    function restorePlainText(active, target, base, text) {
+      return whenWritable(active.input, () => {
+        var snapshot = active.input.state.getSnapshot()
+        var unchanged = snapshot.draftRev === base.rev && snapshot.draft === base.draft
+        var next = unchanged
+          ? snapshot.draft.slice(0, base.start) + text + snapshot.draft.slice(base.end)
+          : snapshot.draft + text
+        active.input.setDraft(next)
+        requestAnimationFrame(() => {
+          if (!target.isConnected || !isComposer(target)) return
+          var end = unchanged ? base.start + text.length : next.length
+          target.focus({ preventScroll: true })
+          target.setSelectionRange(end, end)
+        })
+      })
+    }
+
     function schedule(sessionId, task) {
       var previous = queues.get(sessionId) || Promise.resolve()
       var next = previous
@@ -511,19 +548,79 @@ window.__ModuleLoader__.load({
       await insertUploaded(active, target, base, settled)
     }
 
-    function consume(event, target, files) {
-      var active = _ctx && activeSession(_ctx)
-      if (!active) return false
-      var snapshot = active.input.state.getSnapshot()
-      var base = {
-        draft: snapshot.draft,
-        rev: snapshot.draftRev,
-        start: target.selectionStart ?? snapshot.draft.length,
-        end: target.selectionEnd ?? target.selectionStart ?? snapshot.draft.length,
+    async function routePaths(active, target, base, paths, originalText) {
+      var settled = await Promise.allSettled(paths.map((path) => linkHostPath(path, active)))
+      if (settled.every((result) => result.status === 'rejected')) {
+        var reason = settled[0]?.reason?.message || settled[0]?.reason || 'path is unavailable'
+        active.input.notify('error', tr('processing.failed', { reason }))
+        await restorePlainText(active, target, base, originalText)
+        return
       }
+      await insertUploaded(active, target, base, settled)
+    }
+
+    async function routeWindowsClipboard(active, target, base, fallbackFiles) {
+      try {
+        var attachments = await readWindowsClipboard(active)
+        await insertUploaded(
+          active,
+          target,
+          base,
+          attachments.map((value) => ({ status: 'fulfilled', value })),
+        )
+      } catch (error) {
+        if (fallbackFiles.length > 0) {
+          await routeFiles(active, target, base, fallbackFiles)
+          return
+        }
+        active.input.notify('error', tr('clipboard.unavailable'))
+        console.error('[dsh-paste-to-path] Windows clipboard fallback unavailable', error)
+      }
+    }
+
+    function captureInsertion(target) {
+      var active = _ctx && activeSession(_ctx)
+      if (!active) return null
+      var snapshot = active.input.state.getSnapshot()
+      return {
+        active,
+        base: {
+          draft: snapshot.draft,
+          rev: snapshot.draftRev,
+          start: target.selectionStart ?? snapshot.draft.length,
+          end: target.selectionEnd ?? target.selectionStart ?? snapshot.draft.length,
+        },
+      }
+    }
+
+    function consume(event, target, files) {
+      var insertion = captureInsertion(target)
+      if (!insertion) return false
       event.preventDefault()
       event.stopImmediatePropagation()
-      schedule(active.sessionId, () => routeFiles(active, target, base, files))
+      schedule(insertion.active.sessionId, () => routeFiles(insertion.active, target, insertion.base, files))
+      return true
+    }
+
+    function consumePaths(event, target, payload) {
+      var insertion = captureInsertion(target)
+      if (!insertion) return false
+      event.preventDefault()
+      event.stopImmediatePropagation()
+      schedule(insertion.active.sessionId, () =>
+        routePaths(insertion.active, target, insertion.base, payload.paths, payload.text),
+      )
+      return true
+    }
+
+    function consumeWindowsClipboard(event, target, files) {
+      var insertion = captureInsertion(target)
+      if (!insertion) return false
+      event.preventDefault()
+      event.stopImmediatePropagation()
+      schedule(insertion.active.sessionId, () =>
+        routeWindowsClipboard(insertion.active, target, insertion.base, files),
+      )
       return true
     }
 
@@ -535,6 +632,19 @@ window.__ModuleLoader__.load({
     function onPaste(event) {
       if (!isComposer(event.target)) return
       var files = filesOfPaste(event)
+      var pathPayload = pathsOfPaste(event)
+      if (files.length > 0 && (files.some((file) => file.size > 0) || !pathPayload)) {
+        consume(event, event.target, files)
+        return
+      }
+      if (pathPayload) {
+        consumePaths(event, event.target, pathPayload)
+        return
+      }
+      if (config.windowsClipboardFallback && signalsClipboardFiles(event)) {
+        consumeWindowsClipboard(event, event.target, files)
+        return
+      }
       if (files.length > 0) {
         consume(event, event.target, files)
         return
@@ -812,6 +922,57 @@ window.__ModuleLoader__.load({
       })
     }
 
+    function AttachmentPicker({ sessionId, input, t }) {
+      var picker = React.useRef(null)
+      var disabled = !isWritable(input)
+
+      function choose(event) {
+        var files = Array.from(event.target.files || []).filter(Boolean)
+        event.target.value = ''
+        if (files.length === 0) return
+        var target = currentComposer()
+        var insertion = target && captureInsertion(target)
+        if (!target || !insertion || insertion.active.sessionId !== sessionId) return
+        schedule(sessionId, () => routeFiles(insertion.active, target, insertion.base, files))
+      }
+
+      return jsx.jsxs(React.Fragment, {
+        children: [
+          jsx.jsx('button', {
+            type: 'button',
+            className: 'dsh-p2p-picker',
+            disabled,
+            title: t('attachment.chooseTitle'),
+            'aria-label': t('attachment.choose'),
+            onMouseDown: (event) => event.preventDefault(),
+            onClick: () => picker.current?.click(),
+            children: jsx.jsx('svg', {
+              width: 16,
+              height: 16,
+              viewBox: '0 0 16 16',
+              fill: 'none',
+              'aria-hidden': 'true',
+              children: jsx.jsx('path', {
+                d: 'M5.2 8.9 9.6 4.5a2.1 2.1 0 0 1 3 3l-5.7 5.7a3.4 3.4 0 0 1-4.8-4.8l5.5-5.5',
+                stroke: 'currentColor',
+                strokeWidth: 1.4,
+                strokeLinecap: 'round',
+                strokeLinejoin: 'round',
+              }),
+            }),
+          }),
+          jsx.jsx('input', {
+            ref: picker,
+            className: 'dsh-p2p-picker-input',
+            type: 'file',
+            multiple: true,
+            tabIndex: -1,
+            onChange: choose,
+          }),
+        ],
+      })
+    }
+
     function PasteToPathSettingsCard({ scope, t }) {
       var snapshot = React.useSyncExternalStore(
         React.useCallback((listener) => scope.subscribe(listener), [scope]),
@@ -859,7 +1020,14 @@ window.__ModuleLoader__.load({
 
       function reset() {
         setError('')
-        Promise.resolve(scope.reset()).catch((reason) => {
+        Promise.all([
+          scope.unset('longTextAsAttachment'),
+          scope.unset('longTextThreshold'),
+          scope.unset('maxBytes'),
+          scope.unset('editableTextMaxBytes'),
+          scope.unset('pathTextAsAttachment'),
+          scope.unset('windowsClipboardFallback'),
+        ]).catch((reason) => {
           console.error('[dsh-paste-to-path] could not reset settings', reason)
           setError(t('settings.resetFailed'))
         })
@@ -920,6 +1088,38 @@ window.__ModuleLoader__.load({
                       }),
                       t('settings.longText'),
                     ],
+                  }),
+                  jsx.jsxs('label', {
+                    className: 'dsh-p2p-settings-check',
+                    children: [
+                      jsx.jsx('input', {
+                        type: 'checkbox',
+                        checked: settings.pathTextAsAttachment,
+                        disabled: !writable,
+                        onChange: (event) => write('pathTextAsAttachment', event.target.checked),
+                      }),
+                      t('settings.pathText'),
+                    ],
+                  }),
+                  jsx.jsx('span', {
+                    className: 'dsh-p2p-settings-hint',
+                    children: t('settings.pathTextHint'),
+                  }),
+                  jsx.jsxs('label', {
+                    className: 'dsh-p2p-settings-check',
+                    children: [
+                      jsx.jsx('input', {
+                        type: 'checkbox',
+                        checked: settings.windowsClipboardFallback,
+                        disabled: !writable,
+                        onChange: (event) => write('windowsClipboardFallback', event.target.checked),
+                      }),
+                      t('settings.windowsClipboard'),
+                    ],
+                  }),
+                  jsx.jsx('span', {
+                    className: 'dsh-p2p-settings-hint',
+                    children: t('settings.windowsClipboardHint'),
                   }),
                   jsx.jsxs('label', {
                     className: 'dsh-p2p-settings-field',
@@ -1020,7 +1220,7 @@ window.__ModuleLoader__.load({
       return fetch('/paste-to-path/config')
         .then((res) => (res.ok ? res.json() : Promise.reject(new Error(`config failed (${res.status})`))))
         .then((value) => {
-          if (!settingsReady) acceptConfig(value)
+          if (configScope?.getSnapshot()?.status !== 'ready') acceptConfig(value)
         })
         .catch((error) => console.error('[dsh-paste-to-path] config unavailable', error))
     }
@@ -1030,11 +1230,10 @@ window.__ModuleLoader__.load({
       var disposeStyle = installStyle()
       ctx.effect(() => ctx.locale.register(LOCALE_NS, { zh, en }), 'dsh-paste-to-path: dictionaries')
       localeTranslate = ctx.locale.bind(LOCALE_NS)
-      configScope = createConfigScope()
+      configScope = ctx.settingsScope.bind({ namespace: 'paste-to-path' })
       var synchronizeConfig = () => {
         var snapshot = configScope?.getSnapshot()
         if (snapshot?.status !== 'ready' || snapshot.value === undefined) return
-        settingsReady = true
         acceptConfig(snapshot.value)
       }
       var disposeConfig = configScope.subscribe(synchronizeConfig)
@@ -1043,8 +1242,7 @@ window.__ModuleLoader__.load({
         ctx.slots.register(
           {
             name: 'settings.plugin.item',
-            id: 'paste-to-path',
-            order: 30,
+            key: 'paste-to-path',
             locale: LOCALE_NS,
             inject: () => ({ scope: configScope }),
           },
@@ -1077,6 +1275,18 @@ window.__ModuleLoader__.load({
           AttachmentDock,
         ),
       )
+      ctx.slots.inject('conversation.input.left', () =>
+        ctx.slots.register(
+          {
+            name: 'conversation.input.left',
+            id: 'paste-to-path-picker',
+            order: 20,
+            registrant: 'dsh-paste-to-path',
+            locale: LOCALE_NS,
+          },
+          AttachmentPicker,
+        ),
+      )
       document.addEventListener('paste', onPaste, true)
       document.addEventListener('dragenter', onDragEnter, true)
       document.addEventListener('dragover', onDragOver, true)
@@ -1099,9 +1309,7 @@ window.__ModuleLoader__.load({
             for (var url of previewUrls) URL.revokeObjectURL(url)
             previewUrls.clear()
             config = { ...DEFAULT_CONFIG }
-            configScope.dispose()
             configScope = null
-            settingsReady = false
             localeTranslate = null
             _ctx = null
           },
@@ -1111,7 +1319,16 @@ window.__ModuleLoader__.load({
     }
 
     exports.apply = apply
-    exports.inject = ['sessions', 'conversation', 'slots', 'inputTriggers', 'connection', 'locale', 'workspaces']
+    exports.inject = [
+      'sessions',
+      'conversation',
+      'slots',
+      'inputTriggers',
+      'connection',
+      'locale',
+      'workspaces',
+      'settingsScope',
+    ]
     return module.exports
   },
 })
