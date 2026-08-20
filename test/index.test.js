@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Readable } from 'node:stream'
 import test from 'node:test'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
 import { apply, categoryOf, Config, normalizePastedPath, resolveConfig, safeFileName } from '../index.js'
 
@@ -210,7 +210,8 @@ test('serves live effective configuration while official settings owns writes', 
 })
 
 test('normalizes file URLs and rejects relative clipboard paths', () => {
-  assert.equal(normalizePastedPath('"file:///tmp/report%20one.pdf"'), fileURLToPath('file:///tmp/report%20one.pdf'))
+  const fileUrl = pathToFileURL(join(tmpdir(), 'report one.pdf')).href
+  assert.equal(normalizePastedPath(`"${fileUrl}"`), fileURLToPath(fileUrl))
   assert.throws(() => normalizePastedPath('report.pdf'), /must be absolute/)
 })
 
