@@ -128,7 +128,7 @@ test('keeps partial configuration compatible and normalizes invalid numeric valu
 
 test('public package metadata supports rc.6 through rc.8 and excludes development files', async () => {
   const pkg = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'))
-  assert.equal(pkg.version, '0.0.3')
+  assert.equal(pkg.version, '0.0.2')
   assert.equal(pkg.private, undefined)
   assert.equal(pkg.publishConfig?.access, 'public')
   assert.equal(pkg.repository?.url, 'git+https://github.com/Johnny-xuan/dsh-paste-to-path.git')
