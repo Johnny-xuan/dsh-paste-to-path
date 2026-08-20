@@ -1,6 +1,6 @@
 {
   "name": "dsh-paste-to-path",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "description": "A universal path-backed attachment dock for DeepSeek Harness.",
   "keywords": [
     "deepseek",

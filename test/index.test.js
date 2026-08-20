@@ -128,7 +128,7 @@ test('keeps partial configuration compatible and normalizes invalid numeric valu
 
 test('public package metadata supports rc.6 through rc.8 and excludes development files', async () => {
   const pkg = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'))
-  assert.equal(pkg.version, '0.0.2')
+  assert.equal(pkg.version, '0.0.3')
   assert.equal(pkg.private, undefined)
   assert.equal(pkg.publishConfig?.access, 'public')
   assert.equal(pkg.repository?.url, 'git+https://github.com/Johnny-xuan/dsh-paste-to-path.git')
@@ -156,6 +156,7 @@ test('browser keeps every attachment on the path-backed rail and exposes a resil
   const localeKeys = (block) => [...block.matchAll(/^\s+'([^']+)':/gm)].map((match) => match[1]).sort()
   const pasteHandler = source.slice(source.indexOf('function onPaste'), source.indexOf('function onDragEnter'))
   const dropHandler = source.slice(source.indexOf('function onDrop'), source.indexOf('function removeReference'))
+  const pathHandler = source.slice(source.indexOf('async function routePaths'), source.indexOf('async function routeWindowsClipboard'))
   assert.match(source, /Inspect it using an available image-reading method\./)
   assert.match(guidance, /Text attachment:/)
   assert.match(guidance, /Code attachment:/)
@@ -173,6 +174,9 @@ test('browser keeps every attachment on the path-backed rail and exposes a resil
   assert.match(pasteHandler, /files\.length > 0[\s\S]*consume\(event, event\.target, files\)/)
   assert.match(pasteHandler, /pathsOfPaste\(event\)/)
   assert.match(dropHandler, /files\.length > 0\) consume\(event, target, files\)/)
+  assert.match(pathHandler, /settled\.some\(\(result\) => result\.status === 'rejected'\)/)
+  assert.match(pathHandler, /restorePlainText\(active, target, base, originalText\)/)
+  assert.doesNotMatch(pathHandler, /notify\(/)
   assert.match(source, /ctx\.settingsScope\.bind\(\{ namespace: 'paste-to-path' \}\)/)
   assert.match(source, /settings\.plugin\.item/)
   assert.match(source, /id: 'paste-to-path'/)

@@ -550,9 +550,7 @@ window.__ModuleLoader__.load({
 
     async function routePaths(active, target, base, paths, originalText) {
       var settled = await Promise.allSettled(paths.map((path) => linkHostPath(path, active)))
-      if (settled.every((result) => result.status === 'rejected')) {
-        var reason = settled[0]?.reason?.message || settled[0]?.reason || 'path is unavailable'
-        active.input.notify('error', tr('processing.failed', { reason }))
+      if (settled.some((result) => result.status === 'rejected')) {
         await restorePlainText(active, target, base, originalText)
         return
       }

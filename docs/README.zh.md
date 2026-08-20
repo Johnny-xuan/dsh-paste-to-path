@@ -62,6 +62,8 @@ Agent
 
 只要浏览器确实提供了 `File` 对象，插件就会接住它，包括空文件。浏览器如果提供 `file:` URI 或绝对路径，并且该路径确实存在于 DSH Host，插件也可以直接把它变成附件卡片。
 
+路径转换是事务性的：候选路径必须全部存在于 DSH Host。只要其中一个不可用，插件就会把剪贴板原文作为普通文本粘贴，不显示附件错误，也不会只转换一部分。
+
 Windows Explorer、Finder 和 Linux 文件管理器复制非图片文件时，不同浏览器暴露的剪贴板内容并不一致。如果粘贴事件既没有文件字节，也没有可用的 Host 路径，普通网页无法从被浏览器隐藏的系统剪贴板格式中恢复文件。为处理 [Issue #2](https://github.com/Johnny-xuan/dsh-paste-to-path/issues/2)，本机 Windows Host 通过直接 `localhost` 使用时，插件会在这一步读取 Explorer 的 `FileDropList`；远程连接不会访问 Host 剪贴板。其他情况下请使用插件自己的回形针按钮或拖放。
 
 ---
@@ -278,7 +280,7 @@ DSH 原生附件链路里，文件格式和模型能力通常绑得比较紧。
 | `maxBytes`             | 25 MiB | 单个附件最大大小              |
 | `editableTextMaxBytes` | 1 MiB  | Dock 中允许直接编辑的最大文本文件大小 |
 
-使用 DSH `0.1.0-rc.7` 或更高版本时，也可以在 **Settings → Plugins → Paste to Path** 中直接修改这些配置。`0.0.2` 使用 DSH 官方第三方 settings scope，变更通过 DSH settings 持久化并实时生效；重置按钮会把六项配置恢复为上方 profile 中的默认值。
+使用 DSH `0.1.0-rc.7` 或更高版本时，也可以在 **Settings → Plugins → Paste to Path** 中直接修改这些配置。`0.0.3` 使用 DSH 官方第三方 settings scope，变更通过 DSH settings 持久化并实时生效；重置按钮会把六项配置恢复为上方 profile 中的默认值。
 
 附件 Dock、操作提示和设置卡会跟随 DSH 的 **Language** 设置，目前提供英文和简体中文。发送给 Agent 的路径说明仍保持为稳定的英文协议文本，不会跟随界面语言变化。
 
@@ -366,7 +368,7 @@ Vision / PDF Reader / OCR / Shell / ...
 
 ## 兼容性
 
-`0.0.2` 已在以下版本验证：
+`0.0.3` 已在以下版本验证：
 
 ```text
 DeepSeek Harness 0.1.0-rc.6
@@ -374,6 +376,6 @@ DeepSeek Harness 0.1.0-rc.7
 DeepSeek Harness 0.1.0-rc.8
 ```
 
-附件 Dock 在三个版本上都可工作。rc.6 请在 `cordis.patch.yml` 中修改配置；可视化设置卡需要 rc.7 或更高版本。`0.0.2` 同时注册旧版 list slot 的 `id` 与新版 keyed slot 的 namespace，因此同一个包可以在 rc.6 到 rc.8 加载。
+附件 Dock 在三个版本上都可工作。rc.6 请在 `cordis.patch.yml` 中修改配置；可视化设置卡需要 rc.7 或更高版本。`0.0.3` 同时注册旧版 list slot 的 `id` 与新版 keyed slot 的 namespace，因此同一个包可以在 rc.6 到 rc.8 加载。
 
 DSH 当前仍处于 developer preview。后续版本如果调整相关扩展接口，插件可能需要同步适配。

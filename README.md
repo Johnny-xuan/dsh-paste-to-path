@@ -62,6 +62,8 @@ Images also have thumbnails and lightbox previews.
 
 The plugin catches every real `File` object exposed by the browser, including empty files. It can also turn a pasted `file:` URI or absolute path into a card when that path already exists on the DSH Host.
 
+Path conversion is transactional: every candidate path must exist on the DSH Host. If any candidate is unavailable, the original clipboard text is pasted normally without an attachment error or a partial conversion.
+
 Browsers do not consistently expose non-image files copied from Windows Explorer, Finder, or Linux file managers. If the paste event contains neither file bytes nor a usable Host path, an ordinary web page cannot reconstruct the hidden OS clipboard entry. To address [Issue #2](https://github.com/Johnny-xuan/dsh-paste-to-path/issues/2), the plugin reads Explorer's `FileDropList` at this point when DSH runs on a local Windows Host through a direct `localhost` connection; remote clients never access the Host clipboard. In other cases, use the plugin's paperclip button or drag and drop. A path from a remote browser's device is not a path on the DSH Host.
 
 ---
@@ -278,7 +280,7 @@ Default configuration is provided by `cordis.patch.yml`:
 | `maxBytes` | 25 MiB | Maximum size of one attachment |
 | `editableTextMaxBytes` | 1 MiB | Maximum text-file size editable in the Dock |
 
-On DSH `0.1.0-rc.7` and newer, these values are also available under **Settings → Plugins → Paste to Path**. Version `0.0.2` uses DSH's official third-party settings scope; changes are persisted through DSH settings and apply without restarting the plugin. The reset button returns all six values to the profile defaults shown above.
+On DSH `0.1.0-rc.7` and newer, these values are also available under **Settings → Plugins → Paste to Path**. Version `0.0.3` uses DSH's official third-party settings scope; changes are persisted through DSH settings and apply without restarting the plugin. The reset button returns all six values to the profile defaults shown above.
 
 The attachment Dock, notifications, and settings card follow DSH's **Language** preference and include English and Simplified Chinese. The path instructions serialized for the Agent remain stable English protocol text and do not change with the UI language.
 
@@ -366,7 +368,7 @@ The plugin therefore does not:
 
 ## Compatibility
 
-Version `0.0.2` is tested with:
+Version `0.0.3` is tested with:
 
 ```text
 DeepSeek Harness 0.1.0-rc.6
@@ -374,6 +376,6 @@ DeepSeek Harness 0.1.0-rc.7
 DeepSeek Harness 0.1.0-rc.8
 ```
 
-The attachment Dock works across all three versions. On rc.6, edit plugin configuration in `cordis.patch.yml`; the visual settings card requires rc.7 or newer. Version `0.0.2` registers both the legacy list-slot `id` and the newer keyed-slot namespace so the same package can load on rc.6 through rc.8.
+The attachment Dock works across all three versions. On rc.6, edit plugin configuration in `cordis.patch.yml`; the visual settings card requires rc.7 or newer. Version `0.0.3` registers both the legacy list-slot `id` and the newer keyed-slot namespace so the same package can load on rc.6 through rc.8.
 
 DSH is currently a developer preview. Changes to its extension interfaces may require a corresponding plugin update.
