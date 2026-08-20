@@ -14,7 +14,7 @@ Paste, drop, or choose images, PDFs, Word and Excel documents, archives, code, l
 
 <p align="center"><em>Images, PDFs, archives, and other formats share one attachment Dock.</em></p>
 
-The DSH `0.1.0-rc.7` / `0.1.0-rc.8` Web composer natively accepts PNG, JPEG, WebP, and GIF. PDFs, Office documents, archives, and other formats do not have the same unified attachment entry point. Even an image may fail when the selected model does not support image input or the active adapter is text-only.
+The DSH `0.1.0-rc.6` through `0.1.0-rc.8` Web composer natively accepts PNG, JPEG, WebP, and GIF. PDFs, Office documents, archives, and other formats do not have the same unified attachment entry point. Even an image may fail when the selected model does not support image input or the active adapter is text-only.
 
 `dsh-paste-to-path` does not extend the model's native content types. It takes a simpler route:
 
@@ -223,7 +223,7 @@ If the Agent has no suitable tool, the file still enters the Dock and is saved o
 
 In DSH's native attachment path, supported file formats and model capabilities are closely related.
 
-In DSH `0.1.0-rc.7` / `0.1.0-rc.8`, the native Web image intake accepts:
+In DSH `0.1.0-rc.6` through `0.1.0-rc.8`, the native Web image intake accepts:
 
 - PNG
 - JPEG
@@ -278,11 +278,11 @@ Default configuration is provided by `cordis.patch.yml`:
 | `maxBytes` | 25 MiB | Maximum size of one attachment |
 | `editableTextMaxBytes` | 1 MiB | Maximum text-file size editable in the Dock |
 
-On a local DSH Web deployment, these values are also available under **Settings → Plugins → Paste to Path**. Version `0.0.2` uses DSH's official third-party settings scope; changes are persisted through DSH settings and apply without restarting the plugin. The reset button returns all six values to the profile defaults shown above.
+On DSH `0.1.0-rc.7` and newer, these values are also available under **Settings → Plugins → Paste to Path**. Version `0.0.3` uses DSH's official third-party settings scope; changes are persisted through DSH settings and apply without restarting the plugin. The reset button returns all six values to the profile defaults shown above.
 
 The attachment Dock, notifications, and settings card follow DSH's **Language** preference and include English and Simplified Chinese. The path instructions serialized for the Agent remain stable English protocol text and do not change with the UI language.
 
-The settings card is intentionally local-only. When the Web UI connects to a remote DSH Host, configure the `paste-to-path` entry in that profile's `cordis.patch.yml` instead. Attachment handling remains active with the Host-provided configuration even when the settings card is unavailable.
+DSH `0.1.0-rc.6` does not expose third-party settings namespaces to the Web settings page, and a remote Web UI may also lack a writable scope. In either case, configure the `paste-to-path` entry in that profile's `cordis.patch.yml`. Attachment handling remains active with the Host-provided configuration even when the settings card is unavailable.
 
 ---
 
@@ -366,13 +366,14 @@ The plugin therefore does not:
 
 ## Compatibility
 
-Version `0.0.2` is tested with:
+Version `0.0.3` is tested with:
 
 ```text
+DeepSeek Harness 0.1.0-rc.6
 DeepSeek Harness 0.1.0-rc.7
 DeepSeek Harness 0.1.0-rc.8
 ```
 
-Use plugin `0.0.1` if you must remain on DSH `0.1.0-rc.6`; its settings card uses the older compatibility bridge. Version `0.0.2` requires DSH `>=0.1.0-rc.7 <0.2.0` and uses the official third-party settings API.
+The attachment Dock works across all three versions. On rc.6, edit plugin configuration in `cordis.patch.yml`; the visual settings card requires rc.7 or newer. Version `0.0.3` registers both the legacy list-slot `id` and the newer keyed-slot namespace so the same package can load on rc.6 through rc.8.
 
 DSH is currently a developer preview. Changes to its extension interfaces may require a corresponding plugin update.

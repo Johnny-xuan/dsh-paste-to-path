@@ -126,9 +126,9 @@ test('keeps partial configuration compatible and normalizes invalid numeric valu
   })
 })
 
-test('public package metadata targets the rc.7 settings contract and excludes development files', async () => {
+test('public package metadata supports rc.6 through rc.8 and excludes development files', async () => {
   const pkg = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'))
-  assert.equal(pkg.version, '0.0.2')
+  assert.equal(pkg.version, '0.0.3')
   assert.equal(pkg.private, undefined)
   assert.equal(pkg.publishConfig?.access, 'public')
   assert.equal(pkg.repository?.url, 'git+https://github.com/Johnny-xuan/dsh-paste-to-path.git')
@@ -141,7 +141,7 @@ test('public package metadata targets the rc.7 settings contract and excludes de
   assert.ok(pkg.dependencies?.['@deepseek-ai/schemastery'])
   assert.ok(pkg.files.includes('README.md'))
   assert.ok(!pkg.files.includes('README.zh.md'))
-  assert.equal(pkg.peerDependencies?.['@deepseek-ai/dsh-client-ui-settings'], '>=0.1.0-rc.7 <0.2.0')
+  assert.equal(pkg.peerDependencies?.['@deepseek-ai/dsh-client-ui-settings'], '>=0.1.0-rc.6 <0.2.0')
   assert.ok(!pkg.files.some((entry) => entry.startsWith('test')))
 })
 
@@ -175,6 +175,7 @@ test('browser keeps every attachment on the path-backed rail and exposes a resil
   assert.match(dropHandler, /files\.length > 0\) consume\(event, target, files\)/)
   assert.match(source, /ctx\.settingsScope\.bind\(\{ namespace: 'paste-to-path' \}\)/)
   assert.match(source, /settings\.plugin\.item/)
+  assert.match(source, /id: 'paste-to-path'/)
   assert.match(source, /key: 'paste-to-path'/)
   assert.match(source, /conversation\.input\.left/)
   assert.match(source, /type: 'file'/)

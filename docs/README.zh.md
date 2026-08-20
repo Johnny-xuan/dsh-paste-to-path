@@ -14,7 +14,7 @@
 
 <p align="center"><em>图片、PDF、压缩包等不同格式，都可以放进同一个附件 Dock。</em></p>
 
-DSH `0.1.0-rc.7` / `0.1.0-rc.8` 的 Web composer 原生接收 PNG、JPEG、WebP 和 GIF。PDF、Office 文档、压缩包以及其他格式没有对应的统一附件入口；即使是图片，在不支持图像输入的模型或 text-only adapter 下，也可能无法直接发送。
+DSH `0.1.0-rc.6` 到 `0.1.0-rc.8` 的 Web composer 原生接收 PNG、JPEG、WebP 和 GIF。PDF、Office 文档、压缩包以及其他格式没有对应的统一附件入口；即使是图片，在不支持图像输入的模型或 text-only adapter 下，也可能无法直接发送。
 
 `dsh-paste-to-path` 不去扩展模型原生的 content 类型，而是走另一条更简单的路径：
 
@@ -223,7 +223,7 @@ Inspect it using an available image-reading method.
 
 DSH 原生附件链路里，文件格式和模型能力通常绑得比较紧。
 
-在 DSH `0.1.0-rc.7` / `0.1.0-rc.8` 中，原生 Web 图片入口接收：
+在 DSH `0.1.0-rc.6` 到 `0.1.0-rc.8` 中，原生 Web 图片入口接收：
 
 - PNG
 - JPEG
@@ -278,11 +278,11 @@ DSH 原生附件链路里，文件格式和模型能力通常绑得比较紧。
 | `maxBytes`             | 25 MiB | 单个附件最大大小              |
 | `editableTextMaxBytes` | 1 MiB  | Dock 中允许直接编辑的最大文本文件大小 |
 
-本机运行 DSH Web 时，也可以在 **Settings → Plugins → Paste to Path** 中直接修改这些配置。`0.0.2` 使用 DSH 官方第三方 settings scope，变更通过 DSH settings 持久化并实时生效；重置按钮会把六项配置恢复为上方 profile 中的默认值。
+使用 DSH `0.1.0-rc.7` 或更高版本时，也可以在 **Settings → Plugins → Paste to Path** 中直接修改这些配置。`0.0.3` 使用 DSH 官方第三方 settings scope，变更通过 DSH settings 持久化并实时生效；重置按钮会把六项配置恢复为上方 profile 中的默认值。
 
 附件 Dock、操作提示和设置卡会跟随 DSH 的 **Language** 设置，目前提供英文和简体中文。发送给 Agent 的路径说明仍保持为稳定的英文协议文本，不会跟随界面语言变化。
 
-设置卡只在本机连接时开放。Web UI 连接远程 DSH Host 时，请在对应 profile 的 `cordis.patch.yml` 中覆盖 `paste-to-path` 配置；即使设置卡不可用，附件处理仍会按 Host 返回的配置继续工作。
+DSH `0.1.0-rc.6` 不会把第三方 settings namespace 暴露给 Web 设置页，远程 Web UI 也可能没有可写的 settings scope。这两种情况下请在对应 profile 的 `cordis.patch.yml` 中覆盖 `paste-to-path` 配置；即使设置卡不可用，附件处理仍会按 Host 返回的配置继续工作。
 
 ---
 
@@ -366,13 +366,14 @@ Vision / PDF Reader / OCR / Shell / ...
 
 ## 兼容性
 
-`0.0.2` 已在以下版本验证：
+`0.0.3` 已在以下版本验证：
 
 ```text
+DeepSeek Harness 0.1.0-rc.6
 DeepSeek Harness 0.1.0-rc.7
 DeepSeek Harness 0.1.0-rc.8
 ```
 
-如果必须继续使用 DSH `0.1.0-rc.6`，请保留插件 `0.0.1`，它的设置卡使用旧版兼容桥。插件 `0.0.2` 要求 DSH `>=0.1.0-rc.7 <0.2.0`，并改用官方第三方设置 API。
+附件 Dock 在三个版本上都可工作。rc.6 请在 `cordis.patch.yml` 中修改配置；可视化设置卡需要 rc.7 或更高版本。`0.0.3` 同时注册旧版 list slot 的 `id` 与新版 keyed slot 的 namespace，因此同一个包可以在 rc.6 到 rc.8 加载。
 
 DSH 当前仍处于 developer preview。后续版本如果调整相关扩展接口，插件可能需要同步适配。

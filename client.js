@@ -1242,6 +1242,7 @@ window.__ModuleLoader__.load({
         ctx.slots.register(
           {
             name: 'settings.plugin.item',
+            id: 'paste-to-path',
             key: 'paste-to-path',
             locale: LOCALE_NS,
             inject: () => ({ scope: configScope }),
