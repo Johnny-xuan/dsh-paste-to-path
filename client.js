@@ -136,6 +136,7 @@ window.__ModuleLoader__.load({
     }
 
     var css = `
+      /* Owned by the DSH client module loader through data-plugin-css. */
       .dsh-p2p-dock{box-sizing:border-box;width:calc(100% - 64px);max-width:748px;margin:0 auto;display:flex;flex-direction:column;gap:6px}
       .dsh-p2p-card{border:1px solid var(--dsw-alias-border-l1);background:var(--dsw-specific-tip);border-radius:12px;padding:8px 10px;color:var(--dsw-alias-label-primary);font-size:13px;line-height:18px}
       .dsh-p2p-main{display:flex;align-items:center;gap:9px;min-width:0}
@@ -179,6 +180,17 @@ window.__ModuleLoader__.load({
       .dsh-p2p-picker:disabled{opacity:.45;cursor:default}
       .dsh-p2p-picker-input{display:none}
     `
+    var STYLE_ID = 'dsh-paste-to-path/client.css'
+    if (
+      typeof document !== 'undefined' &&
+      document.querySelector(`style[data-plugin-css=${JSON.stringify(STYLE_ID)}]`) === null
+    ) {
+      var styleTag = document.createElement('style')
+      styleTag.dataset.plugin = 'dsh-paste-to-path'
+      styleTag.dataset.pluginCss = STYLE_ID
+      styleTag.textContent = css
+      document.head.appendChild(styleTag)
+    }
 
     function sessionItems(sessionId) {
       return bySession.get(sessionId) || EMPTY_ITEMS
@@ -964,6 +976,8 @@ window.__ModuleLoader__.load({
             className: 'dsh-p2p-picker-input',
             type: 'file',
             multiple: true,
+            hidden: true,
+            style: { display: 'none' },
             tabIndex: -1,
             onChange: choose,
           }),
@@ -1199,16 +1213,6 @@ window.__ModuleLoader__.load({
       })
     }
 
-    function installStyle() {
-      var tag = document.querySelector('style[data-plugin="dsh-paste-to-path"]')
-      if (tag) return () => {}
-      tag = document.createElement('style')
-      tag.dataset.plugin = 'dsh-paste-to-path'
-      tag.textContent = css
-      document.head.appendChild(tag)
-      return () => tag.remove()
-    }
-
     function acceptConfig(value) {
       if (!value || typeof value !== 'object' || Array.isArray(value)) return
       config = { ...config, ...value }
@@ -1225,7 +1229,6 @@ window.__ModuleLoader__.load({
 
     function apply(ctx) {
       _ctx = ctx
-      var disposeStyle = installStyle()
       ctx.effect(() => ctx.locale.register(LOCALE_NS, { zh, en }), 'dsh-paste-to-path: dictionaries')
       localeTranslate = ctx.locale.bind(LOCALE_NS)
       configScope = ctx.settingsScope.bind({ namespace: 'paste-to-path' })
@@ -1300,7 +1303,6 @@ window.__ModuleLoader__.load({
             document.removeEventListener('drop', onDrop, true)
             disposeConfig()
             disposeSource()
-            disposeStyle()
             queues.clear()
             listeners.clear()
             bySession.clear()

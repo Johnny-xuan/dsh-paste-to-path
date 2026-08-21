@@ -128,7 +128,7 @@ test('keeps partial configuration compatible and normalizes invalid numeric valu
 
 test('public package metadata supports rc.6 through rc.8 and excludes development files', async () => {
   const pkg = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'))
-  assert.equal(pkg.version, '0.0.3')
+  assert.equal(pkg.version, '0.0.4')
   assert.equal(pkg.private, undefined)
   assert.equal(pkg.publishConfig?.access, 'public')
   assert.equal(pkg.repository?.url, 'git+https://github.com/Johnny-xuan/dsh-paste-to-path.git')
@@ -183,6 +183,11 @@ test('browser keeps every attachment on the path-backed rail and exposes a resil
   assert.match(source, /key: 'paste-to-path'/)
   assert.match(source, /conversation\.input\.left/)
   assert.match(source, /type: 'file'/)
+  assert.match(source, /hidden: true/)
+  assert.match(source, /style: \{ display: 'none' \}/)
+  assert.match(source, /styleTag\.dataset\.plugin = 'dsh-paste-to-path'/)
+  assert.match(source, /styleTag\.dataset\.pluginCss = STYLE_ID/)
+  assert.doesNotMatch(source, /function installStyle/)
   assert.match(source, /Reset to profile defaults/)
   assert.match(source, /\/paste-to-path\/config/)
   assert.match(source, /\/paste-to-path\/from-path/)
