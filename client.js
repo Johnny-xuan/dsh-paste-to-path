@@ -20,6 +20,10 @@ window.__ModuleLoader__.load({
     var previewUrls = new Set()
     var EMPTY_ITEMS = Object.freeze([])
     var DEFAULT_CONFIG = Object.freeze({
+      capturePaste: true,
+      captureDrop: true,
+      showPicker: true,
+      showDock: true,
       longTextAsAttachment: true,
       longTextThreshold: 8000,
       maxBytes: 25 * 1024 * 1024,
@@ -29,6 +33,7 @@ window.__ModuleLoader__.load({
     })
     var config = { ...DEFAULT_CONFIG }
     var configScope = null
+    var featureSynchronizers = new Set()
     var localeTranslate = null
     var LOCALE_NS = 'paste-to-path'
     var zh = Object.freeze({
@@ -65,7 +70,15 @@ window.__ModuleLoader__.load({
       'settings.positiveInteger': '请输入正整数。',
       'settings.resetFailed': '设置重置失败。',
       'settings.title': '粘贴到路径',
-      'settings.description': '管理路径附件的大小限制和长文本行为。',
+      'settings.description': '选择插件拥有的输入入口，并管理路径附件行为。',
+      'settings.capturePaste': '接管文件和内容粘贴',
+      'settings.capturePasteHint': '关闭后不注册 paste 监听器；文件、Host 路径和长文本粘贴会交给 DSH 或其他插件。',
+      'settings.captureDrop': '接管文件拖拽',
+      'settings.captureDropHint': '关闭后不注册拖拽监听器；drop 会交给 DSH 或其他插件。',
+      'settings.showPicker': '显示回形针文件选择器',
+      'settings.showPickerHint': '关闭后释放 composer 左侧入口，避免与其他上传插件出现两个回形针。',
+      'settings.showDock': '显示路径附件 Dock',
+      'settings.showDockHint': '关闭后不注册附件 Dock；输入框中的 reference chip 仍然保留。',
       'settings.longText': '将长文本粘贴转换为附件',
       'settings.pathText': '将本机绝对路径粘贴转换为附件',
       'settings.pathTextHint': '仅当该路径确实存在于 DSH Host 时生效；远程浏览器中的设备路径不会映射到 Host。',
@@ -112,7 +125,15 @@ window.__ModuleLoader__.load({
       'settings.positiveInteger': 'Enter a positive integer.',
       'settings.resetFailed': 'The settings could not be reset.',
       'settings.title': 'Paste to Path',
-      'settings.description': 'Manage path-backed attachment limits and long-text behavior.',
+      'settings.description': 'Choose the input surfaces this plugin owns and manage path-backed attachment behavior.',
+      'settings.capturePaste': 'Capture file and content paste',
+      'settings.capturePasteHint': 'When off, no paste listener is registered; files, Host paths, and long text are left to DSH or another plugin.',
+      'settings.captureDrop': 'Capture file drag and drop',
+      'settings.captureDropHint': 'When off, no drag/drop listeners are registered and dropped files are left to DSH or another plugin.',
+      'settings.showPicker': 'Show the paperclip file picker',
+      'settings.showPickerHint': 'Turn this off to release the composer-left entry and avoid duplicate paperclips with another upload plugin.',
+      'settings.showDock': 'Show the path attachment Dock',
+      'settings.showDockHint': 'When off, no Dock entry is registered; reference chips remain in the composer.',
       'settings.longText': 'Turn long pasted text into an attachment',
       'settings.pathText': 'Turn pasted absolute Host paths into attachments',
       'settings.pathTextHint': 'Only applies when the path exists on the DSH Host; a remote browser device path does not map to the Host.',
@@ -291,10 +312,13 @@ window.__ModuleLoader__.load({
     }
 
     function isComposer(el) {
+      var supportedSurface =
+        el?.tagName === 'TEXTAREA' ||
+        (el?.getAttribute?.('contenteditable') === 'true' && el.hasAttribute('data-composer-input'))
       return Boolean(
         el &&
           el.nodeType === 1 &&
-          el.tagName === 'TEXTAREA' &&
+          supportedSurface &&
           el.hasAttribute('data-phase') &&
           el.closest('[data-composer-card]') &&
           !el.disabled &&
@@ -303,7 +327,9 @@ window.__ModuleLoader__.load({
     }
 
     function currentComposer() {
-      var candidates = document.querySelectorAll('[data-composer-card] textarea[data-phase]')
+      var candidates = document.querySelectorAll(
+        '[data-composer-card] textarea[data-phase], [data-composer-card] [data-composer-input][data-phase][contenteditable="true"]',
+      )
       for (var i = 0; i < candidates.length; i++) {
         var el = candidates[i]
         if (!isComposer(el)) continue
@@ -311,6 +337,50 @@ window.__ModuleLoader__.load({
         if (rect.width > 0 && rect.height > 0) return el
       }
       return null
+    }
+
+    function occurrenceLength(occurrence) {
+      return Number.isSafeInteger(occurrence.length) && occurrence.length > 0 ? occurrence.length : 1
+    }
+
+    function detectDraftLength(snapshot) {
+      var expansion = snapshot.occurrences.reduce((total, occurrence) => total + occurrenceLength(occurrence) - 1, 0)
+      return Math.max(0, snapshot.draft.length - expansion)
+    }
+
+    function draftEnd(target, snapshot) {
+      return target.tagName === 'TEXTAREA' ? snapshot.draft.length : detectDraftLength(snapshot)
+    }
+
+    function composerSpan(target, snapshot) {
+      if (target.tagName === 'TEXTAREA') {
+        return {
+          start: target.selectionStart ?? snapshot.draft.length,
+          end: target.selectionEnd ?? target.selectionStart ?? snapshot.draft.length,
+        }
+      }
+      // The 0.1.2 Lexical InputState publishes clipboard coordinates but not
+      // its caret. Append at the detect-projection end so expanded reference
+      // text cannot move the requested span past the actual editor document.
+      var end = draftEnd(target, snapshot)
+      return { start: end, end }
+    }
+
+    function focusComposerEnd(target) {
+      if (!target.isConnected || !isComposer(target)) return
+      target.focus({ preventScroll: true })
+      if (target.tagName === 'TEXTAREA') {
+        var end = target.value.length
+        target.setSelectionRange(end, end)
+        return
+      }
+      var selection = window.getSelection()
+      if (!selection) return
+      var range = document.createRange()
+      range.selectNodeContents(target)
+      range.collapse(false)
+      selection.removeAllRanges()
+      selection.addRange(range)
     }
 
     function activeSession(ctx) {
@@ -458,7 +528,7 @@ window.__ModuleLoader__.load({
     }
 
     function isWritable(snapshot) {
-      return snapshot.phase === 'plain' || snapshot.phase === 'claimed'
+      return snapshot?.phase === 'plain' || snapshot?.phase === 'claimed'
     }
 
     function whenWritable(input, action) {
@@ -502,9 +572,10 @@ window.__ModuleLoader__.load({
           addItem(item)
           var snapshot = active.input.state.getSnapshot()
           var unchanged = index === 0 && snapshot.draftRev === base.rev && snapshot.draft === base.draft
+          var end = draftEnd(target, snapshot)
           var span = unchanged
             ? { start: base.start, end: base.end, draftRev: snapshot.draftRev }
-            : { start: snapshot.draft.length, end: snapshot.draft.length, draftRev: snapshot.draftRev }
+            : { start: end, end, draftRev: snapshot.draftRev }
           var applied = active.actx.bail(active.actx, 'slash/input-insert-reference', {
             reference: referenceFor(item),
             span,
@@ -515,10 +586,8 @@ window.__ModuleLoader__.load({
         }
         requestAnimationFrame(() => {
           var current = activeSession(_ctx)
-          if (!current || current.sessionId !== active.sessionId || !target.isConnected || !isComposer(target)) return
-          var end = target.value.length
-          target.focus({ preventScroll: true })
-          target.setSelectionRange(end, end)
+          if (!current || current.sessionId !== active.sessionId) return
+          focusComposerEnd(target)
         })
       })
     }
@@ -527,16 +596,13 @@ window.__ModuleLoader__.load({
       return whenWritable(active.input, () => {
         var snapshot = active.input.state.getSnapshot()
         var unchanged = snapshot.draftRev === base.rev && snapshot.draft === base.draft
-        var next = unchanged
-          ? snapshot.draft.slice(0, base.start) + text + snapshot.draft.slice(base.end)
-          : snapshot.draft + text
-        active.input.setDraft(next)
-        requestAnimationFrame(() => {
-          if (!target.isConnected || !isComposer(target)) return
-          var end = unchanged ? base.start + text.length : next.length
-          target.focus({ preventScroll: true })
-          target.setSelectionRange(end, end)
-        })
+        var end = draftEnd(target, snapshot)
+        var span = unchanged
+          ? { start: base.start, end: base.end, draftRev: snapshot.draftRev }
+          : { start: end, end, draftRev: snapshot.draftRev }
+        var applied = active.actx.bail(active.actx, 'slash/input-insert-text', { text, span })
+        if (applied !== true) throw new Error('the draft changed before clipboard text could be restored')
+        requestAnimationFrame(() => focusComposerEnd(target))
       })
     }
 
@@ -592,13 +658,14 @@ window.__ModuleLoader__.load({
       var active = _ctx && activeSession(_ctx)
       if (!active) return null
       var snapshot = active.input.state.getSnapshot()
+      var span = composerSpan(target, snapshot)
       return {
         active,
         base: {
           draft: snapshot.draft,
           rev: snapshot.draftRev,
-          start: target.selectionStart ?? snapshot.draft.length,
-          end: target.selectionEnd ?? target.selectionStart ?? snapshot.draft.length,
+          start: span.start,
+          end: span.end,
         },
       }
     }
@@ -640,7 +707,7 @@ window.__ModuleLoader__.load({
     }
 
     function onPaste(event) {
-      if (!isComposer(event.target)) return
+      if (!config.capturePaste || !isComposer(event.target)) return
       var files = filesOfPaste(event)
       var pathPayload = pathsOfPaste(event)
       if (files.length > 0 && (files.some((file) => file.size > 0) || !pathPayload)) {
@@ -665,38 +732,57 @@ window.__ModuleLoader__.load({
     }
 
     function onDragEnter(event) {
-      if (!carriesFiles(event) || !currentComposer()) return
+      if (!config.captureDrop || !carriesFiles(event) || !currentComposer()) return
       event.preventDefault()
       event.stopImmediatePropagation()
     }
 
     function onDragOver(event) {
-      if (!carriesFiles(event) || !currentComposer()) return
+      if (!config.captureDrop || !carriesFiles(event) || !currentComposer()) return
       event.preventDefault()
       event.stopImmediatePropagation()
       if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy'
     }
 
     function onDrop(event) {
-      if (!carriesFiles(event)) return
+      if (!config.captureDrop || !carriesFiles(event)) return
       var target = isComposer(event.target) ? event.target : currentComposer()
       if (!target) return
       var files = filesOfDrop(event)
       if (files.length > 0) consume(event, target, files)
     }
 
-    function removeReference(sessionId, ref, input, inputActions) {
-      var ranges = input.occurrences
-        .filter((occurrence) => occurrence.source === 'paste-to-path' && occurrence.ref === ref)
-        .map((occurrence) => ({ start: occurrence.offset, end: occurrence.offset + 1 }))
-        .sort((a, b) => b.start - a.start)
-      if (ranges.length === 0) return
-      var draft = input.draft
-      for (var range of ranges) {
-        if (draft[range.end] === ' ') range.end += 1
-        draft = draft.slice(0, range.start) + draft.slice(range.end)
+    function removeReference(sessionId, ref, input) {
+      // occurrence offsets and lengths address the expanded clipboard draft,
+      // while input edit spans address the detect projection where every chip
+      // occupies one character. Fold each earlier chip's expansion back out.
+      var expansion = 0
+      var ranges = []
+      for (var occurrence of input.occurrences) {
+        var length = occurrenceLength(occurrence)
+        var start = occurrence.offset - expansion
+        if (occurrence.source === 'paste-to-path' && occurrence.ref === ref) {
+          ranges.push({ start, end: start + 1, clipboardEnd: occurrence.offset + length })
+        }
+        expansion += length - 1
       }
-      inputActions.setDraft(draft)
+      ranges.sort((a, b) => b.start - a.start)
+      if (ranges.length === 0) return
+      var actx = _ctx?.sessions?.scope?.(sessionId)
+      var sessionInput = inputForSession(sessionId)
+      if (!actx || !sessionInput) return
+      for (var range of ranges) {
+        var snapshot = sessionInput.state.getSnapshot()
+        if (snapshot.draft[range.clipboardEnd] === ' ') range.end += 1
+        var applied = actx.bail(actx, 'slash/input-insert-text', {
+          text: '',
+          span: { start: range.start, end: range.end, draftRev: snapshot.draftRev },
+        })
+        if (applied !== true) {
+          sessionInput.notify('error', tr('request.failed', { reason: 'the draft changed before removal' }))
+          return
+        }
+      }
     }
 
     function categoryIcon(category) {
@@ -784,7 +870,13 @@ window.__ModuleLoader__.load({
       function openPath() {
         setOpening(true)
         setError('')
-        _ctx.workspaces.openPath(item.path).then(
+        var request =
+          typeof _ctx.remote?.session?.openWorkspacePath === 'function'
+            ? _ctx.remote.session.openWorkspacePath({ path: item.path }).then((result) => {
+                if (!result?.ok) throw new Error(result?.error?.message || 'Host refused to open the path')
+              })
+            : _ctx.workspaces.openPath(item.path)
+        request.then(
           () => setOpening(false),
           (reason) => {
             setError(t('request.failed', { reason: reason.message || String(reason) }))
@@ -850,7 +942,7 @@ window.__ModuleLoader__.load({
                     className: 'dsh-p2p-button dsh-p2p-remove',
                     title: t('action.removeTitle'),
                     'aria-label': t('action.removeAria', { name: item.name }),
-                    onClick: () => removeReference(item.sessionId, item.id, input, inputActions),
+                    onClick: () => removeReference(item.sessionId, item.id, input),
                     children: '×',
                   }),
                 ],
@@ -904,19 +996,29 @@ window.__ModuleLoader__.load({
       })
     }
 
-    function AttachmentDock({ sessionId, input, inputActions, t }) {
+    function useSlotInput(input, useInput) {
+      return typeof useInput === 'function' ? useInput((value) => value) : input
+    }
+
+    function AttachmentDock({ sessionId, input: legacyInput, useInput, inputActions, t }) {
+      var input = useSlotInput(legacyInput, useInput)
       var connection = _ctx.connection
-      var hostDescription = React.useSyncExternalStore(
-        React.useCallback((listener) => connection.hostDescription.subscribe(listener), [connection]),
-        React.useCallback(() => connection.hostDescription.getSnapshot(), [connection]),
+      var hostSource = connection.hostDescription || connection.generation
+      var hostSnapshot = React.useSyncExternalStore(
+        React.useCallback((listener) => hostSource.subscribe(listener), [hostSource]),
+        React.useCallback(() => hostSource.getSnapshot(), [hostSource]),
         () => undefined,
       )
-      var canOpenPath = connection.isLoopback && hostDescription?.canOpenPath === true
+      var hasOpenPath =
+        typeof _ctx.remote?.session?.openWorkspacePath === 'function' || typeof _ctx.workspaces?.openPath === 'function'
+      var hostAllowsOpen = connection.hostDescription ? hostSnapshot?.canOpenPath === true : hostSnapshot !== undefined
+      var canOpenPath = connection.isLoopback && hasOpenPath && hostAllowsOpen
       var items = React.useSyncExternalStore(
         React.useCallback((listener) => subscribe(sessionId, listener), [sessionId]),
         React.useCallback(() => sessionItems(sessionId), [sessionId]),
         () => EMPTY_ITEMS,
       )
+      if (!input) return null
       var activeRefs = new Set(
         input.occurrences
           .filter((occurrence) => occurrence.source === 'paste-to-path')
@@ -932,7 +1034,8 @@ window.__ModuleLoader__.load({
       })
     }
 
-    function AttachmentPicker({ sessionId, input, t }) {
+    function AttachmentPicker({ sessionId, input: legacyInput, useInput, t }) {
+      var input = useSlotInput(legacyInput, useInput)
       var picker = React.useRef(null)
       var disabled = !isWritable(input)
 
@@ -1033,6 +1136,10 @@ window.__ModuleLoader__.load({
       function reset() {
         setError('')
         Promise.all([
+          scope.unset('capturePaste'),
+          scope.unset('captureDrop'),
+          scope.unset('showPicker'),
+          scope.unset('showDock'),
           scope.unset('longTextAsAttachment'),
           scope.unset('longTextThreshold'),
           scope.unset('maxBytes'),
@@ -1094,8 +1201,72 @@ window.__ModuleLoader__.load({
                     children: [
                       jsx.jsx('input', {
                         type: 'checkbox',
-                        checked: settings.longTextAsAttachment,
+                        checked: settings.capturePaste,
                         disabled: !writable,
+                        onChange: (event) => write('capturePaste', event.target.checked),
+                      }),
+                      t('settings.capturePaste'),
+                    ],
+                  }),
+                  jsx.jsx('span', {
+                    className: 'dsh-p2p-settings-hint',
+                    children: t('settings.capturePasteHint'),
+                  }),
+                  jsx.jsxs('label', {
+                    className: 'dsh-p2p-settings-check',
+                    children: [
+                      jsx.jsx('input', {
+                        type: 'checkbox',
+                        checked: settings.captureDrop,
+                        disabled: !writable,
+                        onChange: (event) => write('captureDrop', event.target.checked),
+                      }),
+                      t('settings.captureDrop'),
+                    ],
+                  }),
+                  jsx.jsx('span', {
+                    className: 'dsh-p2p-settings-hint',
+                    children: t('settings.captureDropHint'),
+                  }),
+                  jsx.jsxs('label', {
+                    className: 'dsh-p2p-settings-check',
+                    children: [
+                      jsx.jsx('input', {
+                        type: 'checkbox',
+                        checked: settings.showPicker,
+                        disabled: !writable,
+                        onChange: (event) => write('showPicker', event.target.checked),
+                      }),
+                      t('settings.showPicker'),
+                    ],
+                  }),
+                  jsx.jsx('span', {
+                    className: 'dsh-p2p-settings-hint',
+                    children: t('settings.showPickerHint'),
+                  }),
+                  jsx.jsxs('label', {
+                    className: 'dsh-p2p-settings-check',
+                    children: [
+                      jsx.jsx('input', {
+                        type: 'checkbox',
+                        checked: settings.showDock,
+                        disabled: !writable,
+                        onChange: (event) => write('showDock', event.target.checked),
+                      }),
+                      t('settings.showDock'),
+                    ],
+                  }),
+                  jsx.jsx('span', {
+                    className: 'dsh-p2p-settings-hint',
+                    children: t('settings.showDockHint'),
+                  }),
+                  jsx.jsxs('label', {
+                    className: 'dsh-p2p-settings-check',
+                    children: [
+                      jsx.jsx('input', {
+                        type: 'checkbox',
+                        checked: settings.longTextAsAttachment,
+                        disabled: !writable || !settings.capturePaste,
                         onChange: (event) => write('longTextAsAttachment', event.target.checked),
                       }),
                       t('settings.longText'),
@@ -1107,7 +1278,7 @@ window.__ModuleLoader__.load({
                       jsx.jsx('input', {
                         type: 'checkbox',
                         checked: settings.pathTextAsAttachment,
-                        disabled: !writable,
+                        disabled: !writable || !settings.capturePaste,
                         onChange: (event) => write('pathTextAsAttachment', event.target.checked),
                       }),
                       t('settings.pathText'),
@@ -1123,7 +1294,7 @@ window.__ModuleLoader__.load({
                       jsx.jsx('input', {
                         type: 'checkbox',
                         checked: settings.windowsClipboardFallback,
-                        disabled: !writable,
+                        disabled: !writable || !settings.capturePaste,
                         onChange: (event) => write('windowsClipboardFallback', event.target.checked),
                       }),
                       t('settings.windowsClipboard'),
@@ -1142,7 +1313,7 @@ window.__ModuleLoader__.load({
                         min: 1,
                         step: 1,
                         value: threshold,
-                        disabled: !writable || !settings.longTextAsAttachment,
+                        disabled: !writable || !settings.capturePaste || !settings.longTextAsAttachment,
                         onChange: (event) => setThreshold(event.target.value),
                         onBlur: () => writeNumber('longTextThreshold', threshold),
                         onKeyDown: (event) => {
@@ -1216,6 +1387,7 @@ window.__ModuleLoader__.load({
     function acceptConfig(value) {
       if (!value || typeof value !== 'object' || Array.isArray(value)) return
       config = { ...config, ...value }
+      for (var synchronize of [...featureSynchronizers]) synchronize()
     }
 
     function loadConfig() {
@@ -1239,7 +1411,7 @@ window.__ModuleLoader__.load({
       }
       var disposeConfig = configScope.subscribe(synchronizeConfig)
       synchronizeConfig()
-      ctx.slots.inject('settings.plugin.item', () =>
+      var disposeSettingsSlot = ctx.slots.inject('settings.plugin.item', () =>
         ctx.slots.register(
           {
             name: 'settings.plugin.item',
@@ -1265,44 +1437,96 @@ window.__ModuleLoader__.load({
           },
         },
       })
-      ctx.slots.inject('conversation.input.dock', () =>
-        ctx.slots.register(
-          {
-            name: 'conversation.input.dock',
-            id: 'paste-to-path-attachments',
-            order: 5,
-            registrant: 'dsh-paste-to-path',
-            locale: LOCALE_NS,
-          },
-          AttachmentDock,
-        ),
+
+      function injectOptionalSlot(slotName, enabled, options, component) {
+        return ctx.slots.inject(slotName, () => {
+          var disposeEntry = null
+          var synchronize = () => {
+            var shouldRegister = enabled()
+            if (shouldRegister && disposeEntry === null) {
+              disposeEntry = ctx.slots.register(options, component)
+              return
+            }
+            if (!shouldRegister && disposeEntry !== null) {
+              var dispose = disposeEntry
+              disposeEntry = null
+              dispose()
+            }
+          }
+          featureSynchronizers.add(synchronize)
+          synchronize()
+          return () => {
+            featureSynchronizers.delete(synchronize)
+            if (disposeEntry !== null) disposeEntry()
+            disposeEntry = null
+          }
+        })
+      }
+
+      var disposeDockSlot = injectOptionalSlot(
+        'conversation.input.dock',
+        () => config.showDock,
+        {
+          name: 'conversation.input.dock',
+          id: 'paste-to-path-attachments',
+          order: 5,
+          registrant: 'dsh-paste-to-path',
+          locale: LOCALE_NS,
+        },
+        AttachmentDock,
       )
-      ctx.slots.inject('conversation.input.left', () =>
-        ctx.slots.register(
-          {
-            name: 'conversation.input.left',
-            id: 'paste-to-path-picker',
-            order: 20,
-            registrant: 'dsh-paste-to-path',
-            locale: LOCALE_NS,
-          },
-          AttachmentPicker,
-        ),
+      var disposePickerSlot = injectOptionalSlot(
+        'conversation.input.left',
+        () => config.showPicker,
+        {
+          name: 'conversation.input.left',
+          id: 'paste-to-path-picker',
+          order: 20,
+          registrant: 'dsh-paste-to-path',
+          locale: LOCALE_NS,
+        },
+        AttachmentPicker,
       )
-      document.addEventListener('paste', onPaste, true)
-      document.addEventListener('dragenter', onDragEnter, true)
-      document.addEventListener('dragover', onDragOver, true)
-      document.addEventListener('drop', onDrop, true)
+
+      var pasteListening = false
+      var dropListening = false
+      var synchronizeDocumentListeners = () => {
+        if (config.capturePaste && !pasteListening) {
+          document.addEventListener('paste', onPaste, true)
+          pasteListening = true
+        } else if (!config.capturePaste && pasteListening) {
+          document.removeEventListener('paste', onPaste, true)
+          pasteListening = false
+        }
+        if (config.captureDrop && !dropListening) {
+          document.addEventListener('dragenter', onDragEnter, true)
+          document.addEventListener('dragover', onDragOver, true)
+          document.addEventListener('drop', onDrop, true)
+          dropListening = true
+        } else if (!config.captureDrop && dropListening) {
+          document.removeEventListener('dragenter', onDragEnter, true)
+          document.removeEventListener('dragover', onDragOver, true)
+          document.removeEventListener('drop', onDrop, true)
+          dropListening = false
+        }
+      }
+      featureSynchronizers.add(synchronizeDocumentListeners)
+      synchronizeDocumentListeners()
       loadConfig()
       if (typeof ctx.effect === 'function') {
         ctx.effect(
           () => () => {
+            featureSynchronizers.delete(synchronizeDocumentListeners)
             document.removeEventListener('paste', onPaste, true)
             document.removeEventListener('dragenter', onDragEnter, true)
             document.removeEventListener('dragover', onDragOver, true)
             document.removeEventListener('drop', onDrop, true)
+            disposePickerSlot()
+            disposeDockSlot()
+            disposeSettingsSlot()
             disposeConfig()
             disposeSource()
+            featureSynchronizers.clear()
             queues.clear()
             listeners.clear()
             bySession.clear()
@@ -1327,6 +1551,8 @@ window.__ModuleLoader__.load({
       'inputTriggers',
       'connection',
       'locale',
+      'remote',
+      'remote.session',
       'workspaces',
       'settingsScope',
     ]

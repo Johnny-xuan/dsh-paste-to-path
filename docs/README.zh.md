@@ -14,7 +14,7 @@
 
 <p align="center"><em>图片、PDF、压缩包等不同格式，都可以放进同一个附件 Dock。</em></p>
 
-DSH `0.1.0-rc.6` 到 `0.1.0-rc.8` 的 Web composer 原生接收 PNG、JPEG、WebP 和 GIF。PDF、Office 文档、压缩包以及其他格式没有对应的统一附件入口；即使是图片，在不支持图像输入的模型或 text-only adapter 下，也可能无法直接发送。
+DSH `0.1.2-rc.1` 的 Web composer 提供原生图片附件链路，但 PDF、Office 文档、压缩包以及其他格式仍没有同样独立于模型能力的入口；即使是图片，在不支持图像输入的模型或 text-only adapter 下，也可能无法直接发送。
 
 `dsh-paste-to-path` 不去扩展模型原生的 content 类型，而是走另一条更简单的路径：
 
@@ -100,7 +100,7 @@ Windows Explorer、Finder 和 Linux 文件管理器复制非图片文件时，�
 
 ### 用系统应用打开文件
 
-本机部署时，可以通过 DSH 的 `host.openPath` 使用系统默认程序打开附件。
+本机部署时，可以通过 DSH 已鉴权的 `session.openWorkspacePath` Remote API 使用系统默认程序打开附件。
 
 ---
 
@@ -225,7 +225,7 @@ Inspect it using an available image-reading method.
 
 DSH 原生附件链路里，文件格式和模型能力通常绑得比较紧。
 
-在 DSH `0.1.0-rc.6` 到 `0.1.0-rc.8` 中，原生 Web 图片入口接收：
+在 DSH `0.1.2-rc.1` 中，原生 Web 图片入口接收：
 
 - PNG
 - JPEG
@@ -263,6 +263,10 @@ DSH 原生附件链路里，文件格式和模型能力通常绑得比较紧。
     - id: paste-to-path
       name: dsh-paste-to-path
       config:
+        capturePaste: true
+        captureDrop: true
+        showPicker: true
+        showDock: true
         longTextAsAttachment: true
         longTextThreshold: 8000
         pathTextAsAttachment: true
@@ -273,6 +277,10 @@ DSH 原生附件链路里，文件格式和模型能力通常绑得比较紧。
 
 | 配置项                    | 默认值    | 说明                    |
 | ---------------------- | ------ | --------------------- |
+| `capturePaste` | `true` | 注册文件、Host 路径和长文本的 paste 监听器 |
+| `captureDrop` | `true` | 注册文件拖拽监听器 |
+| `showPicker` | `true` | 在 `conversation.input.left` 注册回形针入口 |
+| `showDock` | `true` | 在 `conversation.input.dock` 注册路径附件 Dock |
 | `longTextAsAttachment` | `true` | 是否把长文本保存为 `.txt` 附件   |
 | `longTextThreshold`    | `8000` | 长文本触发阈值，单位为字符         |
 | `pathTextAsAttachment` | `true` | 把确实存在于 DSH Host 的绝对路径变成附件 |
@@ -280,11 +288,24 @@ DSH 原生附件链路里，文件格式和模型能力通常绑得比较紧。
 | `maxBytes`             | 25 MiB | 单个附件最大大小              |
 | `editableTextMaxBytes` | 1 MiB  | Dock 中允许直接编辑的最大文本文件大小 |
 
-使用 DSH `0.1.0-rc.7` 或更高版本时，也可以在 **Settings → Plugins → Paste to Path** 中直接修改这些配置。`0.0.4` 使用 DSH 官方第三方 settings scope，变更通过 DSH settings 持久化并实时生效；重置按钮会把六项配置恢复为上方 profile 中的默认值。
+十项配置都可以在 **Settings → Plugins → Paste to Path** 中修改。`0.0.5` 使用 DSH 官方第三方 settings scope，配置通过 DSH settings 持久化并立即生效。关闭前四项中的任何一项时，插件会真正注销对应 listener 或 slot，而不是保留一个空转 handler。重置按钮会把十项配置恢复为上方 profile 中的默认值。
 
 附件 Dock、操作提示和设置卡会跟随 DSH 的 **Language** 设置，目前提供英文和简体中文。发送给 Agent 的路径说明仍保持为稳定的英文协议文本，不会跟随界面语言变化。
 
-DSH `0.1.0-rc.6` 不会把第三方 settings namespace 暴露给 Web 设置页，远程 Web UI 也可能没有可写的 settings scope。这两种情况下请在对应 profile 的 `cordis.patch.yml` 中覆盖 `paste-to-path` 配置；即使设置卡不可用，附件处理仍会按 Host 返回的配置继续工作。
+如果 Web UI 没有可写的 settings scope，请在对应 profile 的 `cordis.patch.yml` 中覆盖 `paste-to-path` 配置；即使设置卡只读，附件处理仍会按 Host 返回的配置继续工作。
+
+### 与其他上传插件共存
+
+默认配置仍保留 Paste to Path 的完整体验。如果希望其他插件接管拖放和回形针，而 Paste to Path 保留剪贴板入口与路径 Dock，可以使用：
+
+```yaml
+capturePaste: true
+captureDrop: false
+showPicker: false
+showDock: true
+```
+
+如果粘贴也应完全交给其他插件，再把 `capturePaste` 设为 `false`。Host 路径存储、会话隔离、reference 序列化、路由鉴权和生命周期清理始终保留；释放的只有指定的浏览器 listener 和 UI slot。
 
 ---
 
@@ -319,6 +340,8 @@ $DSH_HOME/tmp-paste/<分类>/
 ## 隐私
 
 通过选择、拖放或浏览器 `File` 对象进入的文件会上传到你自己的 DSH Host，并保存在 Host 的本地文件系统中；已经存在的 Host 路径只会被原地引用。
+
+在 DSH `0.1.2-rc.1` 上，插件所有 HTTP 路由都会经过 DSH 的浏览器鉴权与 Host/Origin 信任检查；附件记录按会话隔离，路由注册也由插件的 Cordis 生命周期负责回收。
 
 插件本身不会：
 
@@ -368,14 +391,12 @@ Vision / PDF Reader / OCR / Shell / ...
 
 ## 兼容性
 
-`0.0.4` 已在以下版本验证：
+`0.0.5` 面向并已在以下版本验证：
 
 ```text
-DeepSeek Harness 0.1.0-rc.6
-DeepSeek Harness 0.1.0-rc.7
-DeepSeek Harness 0.1.0-rc.8
+DeepSeek Harness 0.1.2-rc.1
 ```
 
-附件 Dock 在三个版本上都可工作。rc.6 请在 `cordis.patch.yml` 中修改配置；可视化设置卡需要 rc.7 或更高版本。`0.0.4` 同时注册旧版 list slot 的 `id` 与新版 keyed slot 的 namespace，因此同一个包可以在 rc.6 到 rc.8 加载。
+它适配了 Lexical composer、slot 的 `useInput` store、带长度的 reference occurrence、Web 路由鉴权、Cordis 路由回收，以及当前 Remote 打开路径 API。已发布的 `0.0.4` 继续作为 DSH `0.1.0-rc.6` 到 `0.1.0-rc.8` 的兼容版本。
 
 DSH 当前仍处于 developer preview。后续版本如果调整相关扩展接口，插件可能需要同步适配。

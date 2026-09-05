@@ -12,9 +12,13 @@ import { fileURLToPath } from 'node:url'
 import z from '@deepseek-ai/schemastery'
 
 export const name = 'dsh-paste-to-path'
-export const inject = ['webServer', 'settings']
+export const inject = ['webServer', 'settings', 'connection']
 
 const DEFAULTS = Object.freeze({
+  capturePaste: true,
+  captureDrop: true,
+  showPicker: true,
+  showDock: true,
   longTextAsAttachment: true,
   longTextThreshold: 8000,
   maxBytes: 25 * 1024 * 1024,
@@ -24,6 +28,10 @@ const DEFAULTS = Object.freeze({
 })
 
 export const Config = z.object({
+  capturePaste: z.boolean().default(DEFAULTS.capturePaste),
+  captureDrop: z.boolean().default(DEFAULTS.captureDrop),
+  showPicker: z.boolean().default(DEFAULTS.showPicker),
+  showDock: z.boolean().default(DEFAULTS.showDock),
   longTextAsAttachment: z.boolean().default(DEFAULTS.longTextAsAttachment),
   longTextThreshold: z.natural().min(1).default(DEFAULTS.longTextThreshold),
   maxBytes: z.natural().min(1).default(DEFAULTS.maxBytes),
@@ -67,6 +75,10 @@ function positiveInteger(value, fallback) {
 
 export function resolveConfig(config = {}) {
   const resolved = {
+    capturePaste: config.capturePaste !== false,
+    captureDrop: config.captureDrop !== false,
+    showPicker: config.showPicker !== false,
+    showDock: config.showDock !== false,
     longTextAsAttachment: config.longTextAsAttachment !== false,
     longTextThreshold: positiveInteger(config.longTextThreshold, DEFAULTS.longTextThreshold),
     maxBytes: positiveInteger(config.maxBytes, DEFAULTS.maxBytes),
@@ -309,6 +321,9 @@ export function readWindowsFileClipboard() {
 }
 
 export function apply(ctx, rawConfig = {}) {
+  if (typeof ctx.connection?.requestRejection !== 'function') {
+    throw new Error('dsh-paste-to-path requires the authenticated Connection service from DSH 0.1.2 or newer')
+  }
   const entryConfig = resolveConfig(rawConfig)
   const settingsScope = ctx.settings.register('paste-to-path', Config, { base: entryConfig })
   let config = resolveConfig(settingsScope.get())
@@ -318,6 +333,17 @@ export function apply(ctx, rawConfig = {}) {
   const defaultFallbackDir = join(process.env.DSH_HOME ?? join(homedir(), '.dsh'), 'tmp-paste')
   const registry = new Map()
 
+  const secureRoute = (route) => ({
+    ...route,
+    handler: async (req, res) => {
+      const rejection = ctx.connection.requestRejection(req)
+      if (rejection !== undefined) {
+        return json(res, rejection, { error: rejection === 401 ? 'authentication required' : 'request forbidden' })
+      }
+      return route.handler(req, res)
+    },
+  })
+
   const routes = [
     {
       name: 'paste-to-path-config',
@@ -326,6 +352,10 @@ export function apply(ctx, rawConfig = {}) {
       handler: async (req, res) => {
         if (req.method !== 'GET') return json(res, 405, { error: 'method not allowed' }, { allow: 'GET' })
         return json(res, 200, {
+          capturePaste: config.capturePaste,
+          captureDrop: config.captureDrop,
+          showPicker: config.showPicker,
+          showDock: config.showDock,
           longTextAsAttachment: config.longTextAsAttachment,
           longTextThreshold: config.longTextThreshold,
           maxBytes: config.maxBytes,
@@ -431,12 +461,23 @@ export function apply(ctx, rawConfig = {}) {
     },
   ]
 
-  for (const route of routes) ctx.webServer.register(route)
-  ctx.effect?.(
-    () => () => {
-      disposeSettingsWatch()
-      registry.clear()
+  ctx.effect(
+    () => {
+      const disposeRoutes = []
+      try {
+        for (const route of routes) disposeRoutes.push(ctx.webServer.register(secureRoute(route)))
+      } catch (error) {
+        for (const dispose of disposeRoutes.reverse()) dispose()
+        disposeSettingsWatch()
+        registry.clear()
+        throw error
+      }
+      return () => {
+        for (const dispose of disposeRoutes.reverse()) dispose()
+        disposeSettingsWatch()
+        registry.clear()
+      }
     },
-    'dsh-paste-to-path: settings and attachment registry',
+    'dsh-paste-to-path: authenticated routes, settings, and attachment registry',
   )
 }

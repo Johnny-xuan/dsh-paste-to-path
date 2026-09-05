@@ -3,6 +3,11 @@
     - id: paste-to-path
       name: dsh-paste-to-path
       config:
+        # Each input/UI module can release its surface to DSH or another plugin.
+        capturePaste: true
+        captureDrop: true
+        showPicker: true
+        showDock: true
         # Short text stays native. Text at or above this length becomes a .txt attachment.
         longTextAsAttachment: true
         longTextThreshold: 8000

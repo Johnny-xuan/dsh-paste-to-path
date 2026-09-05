@@ -35,8 +35,10 @@ function request(method, headers = {}, chunks = []) {
   return req
 }
 
-function harness(overrides = {}) {
+function harness(overrides = {}, options = {}) {
   const routes = new Map()
+  const cleanups = []
+  options.observeRoutes?.(routes)
   let value = resolveConfig(overrides)
   const base = value
   const watchers = new Set()
@@ -69,15 +71,29 @@ function harness(overrides = {}) {
     },
     webServer: {
       register(route) {
+        if (route.path === options.failRoute) throw new Error(`cannot register ${route.path}`)
         routes.set(route.path, route.handler)
         return () => routes.delete(route.path)
       },
     },
-    effect() {},
+    connection: {
+      requestRejection(req) {
+        return typeof options.requestRejection === 'function'
+          ? options.requestRejection(req)
+          : options.rejection
+      },
+    },
+    effect(callback) {
+      const cleanup = callback()
+      if (typeof cleanup === 'function') cleanups.push(cleanup)
+    },
   }
   apply(ctx, overrides)
   routes.updateSettings = (patch) => {
     publish({ ...value, ...patch })
+  }
+  routes.dispose = () => {
+    for (const cleanup of cleanups.reverse()) cleanup()
   }
   return routes
 }
@@ -103,6 +119,10 @@ test('sanitizes names without throwing away unicode labels', () => {
 
 test('keeps partial configuration compatible and normalizes invalid numeric values', () => {
   const config = resolveConfig({
+    capturePaste: false,
+    captureDrop: false,
+    showPicker: false,
+    showDock: false,
     longTextAsAttachment: false,
     longTextThreshold: 1200,
     maxBytes: 0,
@@ -110,6 +130,10 @@ test('keeps partial configuration compatible and normalizes invalid numeric valu
     pathTextAsAttachment: false,
     windowsClipboardFallback: false,
   })
+  assert.equal(config.capturePaste, false)
+  assert.equal(config.captureDrop, false)
+  assert.equal(config.showPicker, false)
+  assert.equal(config.showDock, false)
   assert.equal(config.longTextAsAttachment, false)
   assert.equal(config.longTextThreshold, 1200)
   assert.equal(config.maxBytes, 25 * 1024 * 1024)
@@ -117,6 +141,10 @@ test('keeps partial configuration compatible and normalizes invalid numeric valu
   assert.equal(config.pathTextAsAttachment, false)
   assert.equal(config.windowsClipboardFallback, false)
   assert.deepEqual(Config({ longTextThreshold: 1200 }), {
+    capturePaste: true,
+    captureDrop: true,
+    showPicker: true,
+    showDock: true,
     longTextAsAttachment: true,
     longTextThreshold: 1200,
     maxBytes: 25 * 1024 * 1024,
@@ -126,22 +154,25 @@ test('keeps partial configuration compatible and normalizes invalid numeric valu
   })
 })
 
-test('public package metadata supports rc.6 through rc.8 and excludes development files', async () => {
+test('public package metadata targets DSH 0.1.2 and excludes development files', async () => {
   const pkg = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'))
-  assert.equal(pkg.version, '0.0.4')
+  assert.equal(pkg.version, '0.0.5')
   assert.equal(pkg.private, undefined)
   assert.equal(pkg.publishConfig?.access, 'public')
   assert.equal(pkg.repository?.url, 'git+https://github.com/Johnny-xuan/dsh-paste-to-path.git')
   assert.equal(pkg.dsh?.bundle?.patch, './cordis.patch.yml')
   assert.ok(pkg.dsh?.client?.inject?.includes('@deepseek-ai/dsh-client-ui-attachment'))
   assert.ok(pkg.dsh?.client?.inject?.includes('@deepseek-ai/dsh-client-locale'))
+  assert.ok(pkg.dsh?.client?.inject?.includes('@deepseek-ai/dsh-client-ui-renderer'))
   assert.ok(pkg.dsh?.client?.inject?.includes('@deepseek-ai/dsh-client-ui-settings'))
   assert.ok(pkg.dsh?.client?.inject?.includes('@deepseek-ai/dsh-client-ui-settings-plugins'))
-  assert.ok(pkg.peerDependencies?.['@deepseek-ai/dsh-settings'])
+  assert.ok(!pkg.dsh?.client?.inject?.includes('@deepseek-ai/dsh-client-runtime'))
+  assert.ok(!pkg.dsh?.client?.inject?.includes('@deepseek-ai/dsh-client-ui-slots'))
+  assert.equal(pkg.peerDependencies?.['@deepseek-ai/dsh-settings'], '>=0.1.2-rc.1 <0.2.0')
   assert.ok(pkg.dependencies?.['@deepseek-ai/schemastery'])
   assert.ok(pkg.files.includes('README.md'))
   assert.ok(!pkg.files.includes('README.zh.md'))
-  assert.equal(pkg.peerDependencies?.['@deepseek-ai/dsh-client-ui-settings'], '>=0.1.0-rc.6 <0.2.0')
+  assert.equal(pkg.peerDependencies?.['@deepseek-ai/dsh-client-ui-settings'], '>=0.1.2-rc.1 <0.2.0')
   assert.ok(!pkg.files.some((entry) => entry.startsWith('test')))
 })
 
@@ -173,11 +204,25 @@ test('browser keeps every attachment on the path-backed rail and exposes a resil
   assert.match(source, /tr\('processing\.failed'/)
   assert.match(pasteHandler, /files\.length > 0[\s\S]*consume\(event, event\.target, files\)/)
   assert.match(pasteHandler, /pathsOfPaste\(event\)/)
+  assert.match(dropHandler, /config\.captureDrop/)
   assert.match(dropHandler, /files\.length > 0\) consume\(event, target, files\)/)
   assert.match(pathHandler, /settled\.some\(\(result\) => result\.status === 'rejected'\)/)
   assert.match(pathHandler, /restorePlainText\(active, target, base, originalText\)/)
   assert.doesNotMatch(pathHandler, /notify\(/)
   assert.match(source, /ctx\.settingsScope\.bind\(\{ namespace: 'paste-to-path' \}\)/)
+  assert.match(source, /function injectOptionalSlot/)
+  assert.match(source, /\(\) => config\.showDock/)
+  assert.match(source, /\(\) => config\.showPicker/)
+  assert.match(source, /config\.capturePaste && !pasteListening/)
+  assert.match(source, /config\.captureDrop && !dropListening/)
+  assert.match(source, /data-composer-input/)
+  assert.match(source, /function useSlotInput/)
+  assert.match(source, /slash\/input-insert-text/)
+  assert.match(source, /function detectDraftLength/)
+  assert.match(source, /snapshot\.draft\.length - expansion/)
+  assert.match(source, /occurrence\.length/)
+  assert.match(source, /clipboardEnd: occurrence\.offset \+ length/)
+  assert.match(source, /remote\.session\.openWorkspacePath/)
   assert.match(source, /settings\.plugin\.item/)
   assert.match(source, /id: 'paste-to-path'/)
   assert.match(source, /key: 'paste-to-path'/)
@@ -204,6 +249,10 @@ test('serves live effective configuration while official settings owns writes', 
   const initial = await call(routes.get('/paste-to-path/config'), request('GET'))
   assert.equal(initial.status, 200)
   assert.deepEqual(initial.body, {
+    capturePaste: true,
+    captureDrop: true,
+    showPicker: true,
+    showDock: true,
     longTextAsAttachment: true,
     longTextThreshold: 1200,
     maxBytes: 25 * 1024 * 1024,
@@ -217,6 +266,35 @@ test('serves live effective configuration while official settings owns writes', 
   assert.equal(updated.body.longTextAsAttachment, false)
   assert.equal(updated.body.maxBytes, 4)
   assert.equal(routes.has('/paste-to-path/settings'), false)
+})
+
+test('fails closed when the authenticated Connection service is unavailable', () => {
+  assert.throws(() => apply({}, {}), /authenticated Connection service/)
+})
+
+test('rejects unauthenticated plugin routes and disposes every route with its Cordis effect', async () => {
+  const routes = harness({}, { rejection: 401 })
+  const probes = [
+    await call(routes.get('/paste-to-path/config'), request('GET')),
+    await call(routes.get('/paste-to-path'), request('POST', { 'x-session-id': 'session-test' }, [Buffer.from('x')])),
+    await call(routes.get('/paste-to-path/from-path'), request('POST', { 'x-session-id': 'session-test' }, [Buffer.from('{}')])),
+    await call(routes.get('/paste-to-path/content'), request('GET')),
+    await call(routes.get('/paste-to-path/windows-clipboard'), request('POST')),
+  ]
+  assert.deepEqual(probes.map((result) => result.status), [401, 401, 401, 401, 401])
+  assert.ok(probes.every((result) => result.body.error === 'authentication required'))
+  assert.equal(routes.size, 5)
+  routes.dispose()
+  assert.equal(routes.size, 0)
+})
+
+test('rolls back earlier routes when registration fails partway through', () => {
+  let registered
+  assert.throws(
+    () => harness({}, { failRoute: '/paste-to-path/from-path', observeRoutes: (routes) => (registered = routes) }),
+    /cannot register/,
+  )
+  assert.equal(registered.size, 0)
 })
 
 test('normalizes file URLs and rejects relative clipboard paths', () => {

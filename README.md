@@ -14,7 +14,7 @@ Paste, drop, or choose images, PDFs, Word and Excel documents, archives, code, l
 
 <p align="center"><em>Images, PDFs, archives, and other formats share one attachment Dock.</em></p>
 
-The DSH `0.1.0-rc.6` through `0.1.0-rc.8` Web composer natively accepts PNG, JPEG, WebP, and GIF. PDFs, Office documents, archives, and other formats do not have the same unified attachment entry point. Even an image may fail when the selected model does not support image input or the active adapter is text-only.
+The DSH `0.1.2-rc.1` Web composer has a native image attachment path, but PDFs, Office documents, archives, and other formats do not have the same model-independent entry point. Even an image may fail when the selected model does not support image input or the active adapter is text-only.
 
 `dsh-paste-to-path` does not extend the model's native content types. It takes a simpler route:
 
@@ -100,7 +100,7 @@ The default limit is 1 MiB.
 
 ### Open files with the system application
 
-For a local DSH deployment, `host.openPath` can open an attachment with the system's default application.
+For a local DSH deployment, the authenticated `session.openWorkspacePath` Remote API can open an attachment with the system's default application.
 
 ---
 
@@ -225,7 +225,7 @@ If the Agent has no suitable tool, the file still enters the Dock and is saved o
 
 In DSH's native attachment path, supported file formats and model capabilities are closely related.
 
-In DSH `0.1.0-rc.6` through `0.1.0-rc.8`, the native Web image intake accepts:
+In DSH `0.1.2-rc.1`, the native Web image intake accepts:
 
 - PNG
 - JPEG
@@ -263,6 +263,10 @@ Default configuration is provided by `cordis.patch.yml`:
     - id: paste-to-path
       name: dsh-paste-to-path
       config:
+        capturePaste: true
+        captureDrop: true
+        showPicker: true
+        showDock: true
         longTextAsAttachment: true
         longTextThreshold: 8000
         pathTextAsAttachment: true
@@ -273,6 +277,10 @@ Default configuration is provided by `cordis.patch.yml`:
 
 | Option | Default | Description |
 | --- | --- | --- |
+| `capturePaste` | `true` | Register the paste listener for files, Host paths, and long text |
+| `captureDrop` | `true` | Register the file drag-and-drop listeners |
+| `showPicker` | `true` | Register the paperclip entry in `conversation.input.left` |
+| `showDock` | `true` | Register the path-attachment Dock in `conversation.input.dock` |
 | `longTextAsAttachment` | `true` | Save long pasted text as a `.txt` attachment |
 | `longTextThreshold` | `8000` | Character threshold for long-text conversion |
 | `pathTextAsAttachment` | `true` | Link pasted absolute paths that exist on the DSH Host |
@@ -280,11 +288,24 @@ Default configuration is provided by `cordis.patch.yml`:
 | `maxBytes` | 25 MiB | Maximum size of one attachment |
 | `editableTextMaxBytes` | 1 MiB | Maximum text-file size editable in the Dock |
 
-On DSH `0.1.0-rc.7` and newer, these values are also available under **Settings → Plugins → Paste to Path**. Version `0.0.4` uses DSH's official third-party settings scope; changes are persisted through DSH settings and apply without restarting the plugin. The reset button returns all six values to the profile defaults shown above.
+All ten values are available under **Settings → Plugins → Paste to Path**. Version `0.0.5` uses DSH's official third-party settings scope; changes are persisted through DSH settings and apply immediately. Turning off one of the first four options unregisters that listener or slot instead of leaving an inactive handler behind. The reset button returns all ten values to the profile defaults shown above.
 
 The attachment Dock, notifications, and settings card follow DSH's **Language** preference and include English and Simplified Chinese. The path instructions serialized for the Agent remain stable English protocol text and do not change with the UI language.
 
-DSH `0.1.0-rc.6` does not expose third-party settings namespaces to the Web settings page, and a remote Web UI may also lack a writable scope. In either case, configure the `paste-to-path` entry in that profile's `cordis.patch.yml`. Attachment handling remains active with the Host-provided configuration even when the settings card is unavailable.
+If a Web UI does not have a writable settings scope, configure the `paste-to-path` entry in that profile's `cordis.patch.yml`. Attachment handling remains active with the Host-provided configuration even when the settings card is read-only.
+
+### Coexisting with another upload plugin
+
+The default remains the complete Paste to Path experience. If another plugin should own drag/drop and the paperclip while Paste to Path keeps clipboard intake and its path Dock, use:
+
+```yaml
+capturePaste: true
+captureDrop: false
+showPicker: false
+showDock: true
+```
+
+Set `capturePaste: false` as well when the other plugin should own paste. Core path storage, session isolation, reference serialization, route authentication, and lifecycle cleanup remain active; only the selected browser listeners and UI slots are released.
 
 ---
 
@@ -319,6 +340,8 @@ The path therefore remains valid for undo, re-send, or later reference.
 ## Privacy
 
 Files chosen, dropped, or exposed as browser `File` objects are uploaded to your own DSH Host and saved on its local filesystem. Existing Host paths are only linked in place.
+
+On DSH `0.1.2-rc.1`, every plugin HTTP route uses DSH's browser authentication and Host/Origin trust checks. Attachment records are isolated by session, and route registrations are removed with the plugin's Cordis lifecycle.
 
 The plugin itself does not:
 
@@ -368,14 +391,12 @@ The plugin therefore does not:
 
 ## Compatibility
 
-Version `0.0.4` is tested with:
+Version `0.0.5` targets and is tested with:
 
 ```text
-DeepSeek Harness 0.1.0-rc.6
-DeepSeek Harness 0.1.0-rc.7
-DeepSeek Harness 0.1.0-rc.8
+DeepSeek Harness 0.1.2-rc.1
 ```
 
-The attachment Dock works across all three versions. On rc.6, edit plugin configuration in `cordis.patch.yml`; the visual settings card requires rc.7 or newer. Version `0.0.4` registers both the legacy list-slot `id` and the newer keyed-slot namespace so the same package can load on rc.6 through rc.8.
+It supports the Lexical composer, `useInput` slot stores, length-aware reference occurrences, authenticated Web routes, Cordis-owned route disposal, and the current Remote path-opening API. Version `0.0.4` remains the published compatibility line for DSH `0.1.0-rc.6` through `0.1.0-rc.8`.
 
 DSH is currently a developer preview. Changes to its extension interfaces may require a corresponding plugin update.
