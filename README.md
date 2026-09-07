@@ -288,7 +288,7 @@ Default configuration is provided by `cordis.patch.yml`:
 | `maxBytes` | 25 MiB | Maximum size of one attachment |
 | `editableTextMaxBytes` | 1 MiB | Maximum text-file size editable in the Dock |
 
-All ten values are available under **Settings → Plugins → Paste to Path**. Version `0.0.5` uses DSH's official third-party settings scope; changes are persisted through DSH settings and apply immediately. Turning off one of the first four options unregisters that listener or slot instead of leaving an inactive handler behind. The reset button returns all ten values to the profile defaults shown above.
+All ten values are available under **Settings → Plugins → Paste to Path**. Version `0.0.6` uses DSH's official third-party settings scope; changes are persisted through DSH settings and apply immediately. Turning off one of the first four options unregisters that listener or slot instead of leaving an inactive handler behind. The reset button returns all ten values to the profile defaults shown above.
 
 The attachment Dock, notifications, and settings card follow DSH's **Language** preference and include English and Simplified Chinese. The path instructions serialized for the Agent remain stable English protocol text and do not change with the UI language.
 
@@ -391,7 +391,7 @@ The plugin therefore does not:
 
 ## Compatibility
 
-Version `0.0.5` targets and is tested with:
+Version `0.0.6` targets and is tested with:
 
 ```text
 DeepSeek Harness 0.1.2-rc.1

@@ -311,6 +311,9 @@ window.__ModuleLoader__.load({
       return Array.from(event.dataTransfer?.types || []).includes('Files')
     }
 
+    var COMPOSER_SELECTOR =
+      '[data-composer-card] textarea[data-phase], [data-composer-card] [data-composer-input][data-phase][contenteditable="true"]'
+
     function isComposer(el) {
       var supportedSurface =
         el?.tagName === 'TEXTAREA' ||
@@ -326,10 +329,16 @@ window.__ModuleLoader__.load({
       )
     }
 
+    function composerForTarget(target) {
+      var element = target?.nodeType === 1 ? target : target?.parentElement
+      if (!element) return null
+      if (isComposer(element)) return element
+      var composer = element.closest?.(COMPOSER_SELECTOR)
+      return isComposer(composer) ? composer : null
+    }
+
     function currentComposer() {
-      var candidates = document.querySelectorAll(
-        '[data-composer-card] textarea[data-phase], [data-composer-card] [data-composer-input][data-phase][contenteditable="true"]',
-      )
+      var candidates = document.querySelectorAll(COMPOSER_SELECTOR)
       for (var i = 0; i < candidates.length; i++) {
         var el = candidates[i]
         if (!isComposer(el)) continue
@@ -707,28 +716,30 @@ window.__ModuleLoader__.load({
     }
 
     function onPaste(event) {
-      if (!config.capturePaste || !isComposer(event.target)) return
+      if (!config.capturePaste) return
+      var target = composerForTarget(event.target)
+      if (!target) return
       var files = filesOfPaste(event)
       var pathPayload = pathsOfPaste(event)
       if (files.length > 0 && (files.some((file) => file.size > 0) || !pathPayload)) {
-        consume(event, event.target, files)
+        consume(event, target, files)
         return
       }
       if (pathPayload) {
-        consumePaths(event, event.target, pathPayload)
+        consumePaths(event, target, pathPayload)
         return
       }
       if (config.windowsClipboardFallback && signalsClipboardFiles(event)) {
-        consumeWindowsClipboard(event, event.target, files)
+        consumeWindowsClipboard(event, target, files)
         return
       }
       if (files.length > 0) {
-        consume(event, event.target, files)
+        consume(event, target, files)
         return
       }
       if (!config.longTextAsAttachment) return
       var text = event.clipboardData?.getData('text/plain') || ''
-      if (text.length >= config.longTextThreshold) consume(event, event.target, [longTextFile(text)])
+      if (text.length >= config.longTextThreshold) consume(event, target, [longTextFile(text)])
     }
 
     function onDragEnter(event) {
@@ -746,7 +757,7 @@ window.__ModuleLoader__.load({
 
     function onDrop(event) {
       if (!config.captureDrop || !carriesFiles(event)) return
-      var target = isComposer(event.target) ? event.target : currentComposer()
+      var target = composerForTarget(event.target) || currentComposer()
       if (!target) return
       var files = filesOfDrop(event)
       if (files.length > 0) consume(event, target, files)

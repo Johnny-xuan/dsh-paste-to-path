@@ -288,7 +288,7 @@ DSH 原生附件链路里，文件格式和模型能力通常绑得比较紧。
 | `maxBytes`             | 25 MiB | 单个附件最大大小              |
 | `editableTextMaxBytes` | 1 MiB  | Dock 中允许直接编辑的最大文本文件大小 |
 
-十项配置都可以在 **Settings → Plugins → Paste to Path** 中修改。`0.0.5` 使用 DSH 官方第三方 settings scope，配置通过 DSH settings 持久化并立即生效。关闭前四项中的任何一项时，插件会真正注销对应 listener 或 slot，而不是保留一个空转 handler。重置按钮会把十项配置恢复为上方 profile 中的默认值。
+十项配置都可以在 **Settings → Plugins → Paste to Path** 中修改。`0.0.6` 使用 DSH 官方第三方 settings scope，配置通过 DSH settings 持久化并立即生效。关闭前四项中的任何一项时，插件会真正注销对应 listener 或 slot，而不是保留一个空转 handler。重置按钮会把十项配置恢复为上方 profile 中的默认值。
 
 附件 Dock、操作提示和设置卡会跟随 DSH 的 **Language** 设置，目前提供英文和简体中文。发送给 Agent 的路径说明仍保持为稳定的英文协议文本，不会跟随界面语言变化。
 
@@ -391,7 +391,7 @@ Vision / PDF Reader / OCR / Shell / ...
 
 ## 兼容性
 
-`0.0.5` 面向并已在以下版本验证：
+`0.0.6` 面向并已在以下版本验证：
 
 ```text
 DeepSeek Harness 0.1.2-rc.1

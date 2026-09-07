@@ -156,7 +156,7 @@ test('keeps partial configuration compatible and normalizes invalid numeric valu
 
 test('public package metadata targets DSH 0.1.2 and excludes development files', async () => {
   const pkg = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'))
-  assert.equal(pkg.version, '0.0.5')
+  assert.equal(pkg.version, '0.0.6')
   assert.equal(pkg.private, undefined)
   assert.equal(pkg.publishConfig?.access, 'public')
   assert.equal(pkg.repository?.url, 'git+https://github.com/Johnny-xuan/dsh-paste-to-path.git')
@@ -202,9 +202,12 @@ test('browser keeps every attachment on the path-backed rail and exposes a resil
   assert.match(source, /children: t\('settings\.title'\)/)
   assert.match(source, /children: editing \? t\('action\.collapse'\) : t\('action\.edit'\)/)
   assert.match(source, /tr\('processing\.failed'/)
-  assert.match(pasteHandler, /files\.length > 0[\s\S]*consume\(event, event\.target, files\)/)
+  assert.match(pasteHandler, /var target = composerForTarget\(event\.target\)/)
+  assert.match(pasteHandler, /files\.length > 0[\s\S]*consume\(event, target, files\)/)
+  assert.doesNotMatch(pasteHandler, /isComposer\(event\.target\)/)
   assert.match(pasteHandler, /pathsOfPaste\(event\)/)
   assert.match(dropHandler, /config\.captureDrop/)
+  assert.match(dropHandler, /composerForTarget\(event\.target\) \|\| currentComposer\(\)/)
   assert.match(dropHandler, /files\.length > 0\) consume\(event, target, files\)/)
   assert.match(pathHandler, /settled\.some\(\(result\) => result\.status === 'rejected'\)/)
   assert.match(pathHandler, /restorePlainText\(active, target, base, originalText\)/)
