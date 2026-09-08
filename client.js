@@ -368,9 +368,31 @@ window.__ModuleLoader__.load({
           end: target.selectionEnd ?? target.selectionStart ?? snapshot.draft.length,
         }
       }
-      // The 0.1.2 Lexical InputState publishes clipboard coordinates but not
-      // its caret. Append at the detect-projection end so expanded reference
-      // text cannot move the requested span past the actual editor document.
+      // Contenteditable (Lexical) editor: read the DOM caret position and
+      // approximate the clipboard-projection offset. At paste time there are
+      // no chips from the current operation yet, so the DOM text content
+      // (which excludes decorator-rendered chips) is a valid detect-text
+      // approximation. We map it to clipboard coordinates by adding the
+      // cumulative clipboard-text expansion of any chips that precede the
+      // caret.
+      var sel = window.getSelection()
+      if (sel !== null && sel.rangeCount > 0 && target.contains(sel.anchorNode)) {
+        var range = sel.getRangeAt(0)
+        var pre = document.createRange()
+        pre.selectNodeContents(target)
+        pre.setEnd(range.startContainer, range.startOffset)
+        var detectPos = pre.toString().length
+        pre.detach()
+        // Walk occurrences that fall before this detect position
+        // (each chip occupies 1 detect-text character = U+FFFC, and
+        // expands to clipboardText in the clipboard projection).
+        var clipPos = detectPos
+        for (var occ of snapshot.occurrences) {
+          if (occ.offset <= clipPos) clipPos += occ.clipboardText.length - 1
+          else break
+        }
+        return { start: clipPos, end: clipPos }
+      }
       var end = draftEnd(target, snapshot)
       return { start: end, end }
     }
@@ -383,13 +405,12 @@ window.__ModuleLoader__.load({
         target.setSelectionRange(end, end)
         return
       }
-      var selection = window.getSelection()
-      if (!selection) return
-      var range = document.createRange()
-      range.selectNodeContents(target)
-      range.collapse(false)
-      selection.removeAllRanges()
-      selection.addRange(range)
+      // Contenteditable (Lexical) editor: only focus, do NOT touch DOM
+      // selection. Lexical manages its own internal selection state; raw
+      // DOM selection manipulation here desyncs it from Lexical's copy,
+      // causing subsequent mid-line typing to jump to the end of the
+      // paragraph. Lexical's own update listener already places the
+      // caret at the correct position after chip insertion.
     }
 
     function activeSession(ctx) {
