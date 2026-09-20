@@ -3,12 +3,15 @@
     - id: paste-to-path
       name: dsh-paste-to-path
       config:
-        # Each input/UI module can release its surface to DSH or another plugin.
+        # Off by default: let DSH 0.1.5+ own ordinary images and files.
+        # Turn this on only to restore the complete classic P2P attachment path.
+        takeOverNativeAttachments: false
+        # Legacy P2P implementation details used only while takeover is enabled.
         capturePaste: true
         captureDrop: true
         showPicker: true
         showDock: true
-        # Short text stays native. Text at or above this length becomes a .txt attachment.
+        # Independent of takeover. Long text follows the selected attachment owner.
         longTextAsAttachment: true
         longTextThreshold: 8000
         # Convert pasted absolute paths into managed references when they exist on the DSH Host.

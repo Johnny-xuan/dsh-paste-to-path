@@ -119,6 +119,7 @@ test('sanitizes names without throwing away unicode labels', () => {
 
 test('keeps partial configuration compatible and normalizes invalid numeric values', () => {
   const config = resolveConfig({
+    takeOverNativeAttachments: true,
     capturePaste: false,
     captureDrop: false,
     showPicker: false,
@@ -130,10 +131,11 @@ test('keeps partial configuration compatible and normalizes invalid numeric valu
     pathTextAsAttachment: false,
     windowsClipboardFallback: false,
   })
-  assert.equal(config.capturePaste, false)
-  assert.equal(config.captureDrop, false)
-  assert.equal(config.showPicker, false)
-  assert.equal(config.showDock, false)
+  assert.equal(config.takeOverNativeAttachments, true)
+  assert.equal(config.capturePaste, true)
+  assert.equal(config.captureDrop, true)
+  assert.equal(config.showPicker, true)
+  assert.equal(config.showDock, true)
   assert.equal(config.longTextAsAttachment, false)
   assert.equal(config.longTextThreshold, 1200)
   assert.equal(config.maxBytes, 25 * 1024 * 1024)
@@ -141,6 +143,7 @@ test('keeps partial configuration compatible and normalizes invalid numeric valu
   assert.equal(config.pathTextAsAttachment, false)
   assert.equal(config.windowsClipboardFallback, false)
   assert.deepEqual(Config({ longTextThreshold: 1200 }), {
+    takeOverNativeAttachments: false,
     capturePaste: true,
     captureDrop: true,
     showPicker: true,
@@ -154,9 +157,9 @@ test('keeps partial configuration compatible and normalizes invalid numeric valu
   })
 })
 
-test('public package metadata targets DSH 0.1.2 and excludes development files', async () => {
+test('public package metadata targets native-attachment DSH and excludes development files', async () => {
   const pkg = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'))
-  assert.equal(pkg.version, '0.0.6')
+  assert.equal(pkg.version, '0.0.7')
   assert.equal(pkg.private, undefined)
   assert.equal(pkg.publishConfig?.access, 'public')
   assert.equal(pkg.repository?.url, 'git+https://github.com/Johnny-xuan/dsh-paste-to-path.git')
@@ -168,15 +171,16 @@ test('public package metadata targets DSH 0.1.2 and excludes development files',
   assert.ok(pkg.dsh?.client?.inject?.includes('@deepseek-ai/dsh-client-ui-settings-plugins'))
   assert.ok(!pkg.dsh?.client?.inject?.includes('@deepseek-ai/dsh-client-runtime'))
   assert.ok(!pkg.dsh?.client?.inject?.includes('@deepseek-ai/dsh-client-ui-slots'))
-  assert.equal(pkg.peerDependencies?.['@deepseek-ai/dsh-settings'], '>=0.1.2-rc.1 <0.2.0')
+  assert.equal(pkg.peerDependencies?.['@deepseek-ai/dsh-settings'], '>=0.1.5-rc.1 <0.2.0')
   assert.ok(pkg.dependencies?.['@deepseek-ai/schemastery'])
   assert.ok(pkg.files.includes('README.md'))
+  assert.ok(pkg.files.includes('docs/README.zh.md'))
   assert.ok(!pkg.files.includes('README.zh.md'))
-  assert.equal(pkg.peerDependencies?.['@deepseek-ai/dsh-client-ui-settings'], '>=0.1.2-rc.1 <0.2.0')
+  assert.equal(pkg.peerDependencies?.['@deepseek-ai/dsh-client-ui-settings'], '>=0.1.5-rc.1 <0.2.0')
   assert.ok(!pkg.files.some((entry) => entry.startsWith('test')))
 })
 
-test('browser keeps every attachment on the path-backed rail and exposes a resilient settings UI', async () => {
+test('browser makes Native and classic P2P mutually exclusive and exposes both settings surfaces', async () => {
   const [host, source] = await Promise.all([
     readFile(new URL('../index.js', import.meta.url), 'utf8'),
     readFile(new URL('../client.js', import.meta.url), 'utf8'),
@@ -187,6 +191,7 @@ test('browser keeps every attachment on the path-backed rail and exposes a resil
   const localeKeys = (block) => [...block.matchAll(/^\s+'([^']+)':/gm)].map((match) => match[1]).sort()
   const pasteHandler = source.slice(source.indexOf('function onPaste'), source.indexOf('function onDragEnter'))
   const dropHandler = source.slice(source.indexOf('function onDrop'), source.indexOf('function removeReference'))
+  const finalSettings = source.slice(source.indexOf('function FinalSettingsFields'), source.indexOf('function FinalLegacySettingsCard'))
   const pathHandler = source.slice(source.indexOf('async function routePaths'), source.indexOf('async function routeWindowsClipboard'))
   assert.match(source, /Inspect it using an available image-reading method\./)
   assert.match(guidance, /Text attachment:/)
@@ -203,21 +208,26 @@ test('browser keeps every attachment on the path-backed rail and exposes a resil
   assert.match(source, /children: editing \? t\('action\.collapse'\) : t\('action\.edit'\)/)
   assert.match(source, /tr\('processing\.failed'/)
   assert.match(pasteHandler, /var target = composerForTarget\(event\.target\)/)
+  assert.match(pasteHandler, /!config\.takeOverNativeAttachments/)
+  assert.match(pasteHandler, /consumeNativeLongText\(event, nativeText\)/)
+  assert.match(pasteHandler, /files\.length > 0 \|\| signalsClipboardFiles\(event\)/)
   assert.match(pasteHandler, /files\.length > 0[\s\S]*consume\(event, target, files\)/)
   assert.doesNotMatch(pasteHandler, /isComposer\(event\.target\)/)
   assert.match(pasteHandler, /pathsOfPaste\(event\)/)
-  assert.match(dropHandler, /config\.captureDrop/)
+  assert.match(dropHandler, /config\.takeOverNativeAttachments/)
   assert.match(dropHandler, /composerForTarget\(event\.target\) \|\| currentComposer\(\)/)
   assert.match(dropHandler, /files\.length > 0\) consume\(event, target, files\)/)
+  assert.match(source, /function onNativeFileInput\(event\)/)
+  assert.match(source, /document\.addEventListener\('change', onNativeFileInput, true\)/)
+  assert.match(source, /summary\?\.retainedBy\?\.mainView/)
   assert.match(pathHandler, /settled\.some\(\(result\) => result\.status === 'rejected'\)/)
   assert.match(pathHandler, /restorePlainText\(active, target, base, originalText\)/)
   assert.doesNotMatch(pathHandler, /notify\(/)
   assert.match(source, /ctx\.settingsScope\.bind\(\{ namespace: 'paste-to-path' \}\)/)
   assert.match(source, /function injectOptionalSlot/)
-  assert.match(source, /\(\) => config\.showDock/)
-  assert.match(source, /\(\) => config\.showPicker/)
-  assert.match(source, /config\.capturePaste && !pasteListening/)
-  assert.match(source, /config\.captureDrop && !dropListening/)
+  assert.match(source, /\(\) => config\.takeOverNativeAttachments/)
+  assert.match(source, /config\.takeOverNativeAttachments \|\| config\.longTextAsAttachment/)
+  assert.match(source, /config\.takeOverNativeAttachments && !dropListening/)
   assert.match(source, /data-composer-input/)
   assert.match(source, /function useSlotInput/)
   assert.match(source, /slash\/input-insert-text/)
@@ -227,6 +237,8 @@ test('browser keeps every attachment on the path-backed rail and exposes a resil
   assert.match(source, /clipboardEnd: occurrence\.offset \+ length/)
   assert.match(source, /remote\.session\.openWorkspacePath/)
   assert.match(source, /settings\.plugin\.item/)
+  assert.match(source, /plugins\.row\.config/)
+  assert.match(source, /key: 'dsh-paste-to-path#paste-to-path'/)
   assert.match(source, /id: 'paste-to-path'/)
   assert.match(source, /key: 'paste-to-path'/)
   assert.match(source, /conversation\.input\.left/)
@@ -237,6 +249,13 @@ test('browser keeps every attachment on the path-backed rail and exposes a resil
   assert.match(source, /styleTag\.dataset\.pluginCss = STYLE_ID/)
   assert.doesNotMatch(source, /function installStyle/)
   assert.match(source, /Reset to profile defaults/)
+  assert.match(finalSettings, /settings\.takeover/)
+  assert.match(finalSettings, /settings\.longText/)
+  assert.match(finalSettings, /settings\.threshold/)
+  assert.match(finalSettings, /write\('longTextThreshold', value\)/)
+  assert.match(finalSettings, /scope\.unset\('longTextThreshold'\)/)
+  assert.match(finalSettings, /type: 'number'/)
+  assert.doesNotMatch(finalSettings, /settings\.captureDrop|settings\.showPicker|settings\.pathText/)
   assert.match(source, /\/paste-to-path\/config/)
   assert.match(source, /\/paste-to-path\/from-path/)
   assert.match(source, /\/paste-to-path\/windows-clipboard/)
@@ -252,6 +271,7 @@ test('serves live effective configuration while official settings owns writes', 
   const initial = await call(routes.get('/paste-to-path/config'), request('GET'))
   assert.equal(initial.status, 200)
   assert.deepEqual(initial.body, {
+    takeOverNativeAttachments: false,
     capturePaste: true,
     captureDrop: true,
     showPicker: true,

@@ -1,8 +1,8 @@
 // dsh-paste-to-path — browser half.
 //
-// Binary/long-text paste becomes a path-backed reference chip plus a managed
-// card above the composer. DSH's reference codec expands each chip to plain
-// path text inside the ordinary submit transaction.
+// DSH Native owns ordinary attachments by default. The plugin only converts
+// long pasted text into a native .txt attachment unless the user explicitly
+// enables the complete classic path-backed P2P workflow.
 
 window.__ModuleLoader__.load({
   id: 'dsh-paste-to-path',
@@ -20,6 +20,7 @@ window.__ModuleLoader__.load({
     var previewUrls = new Set()
     var EMPTY_ITEMS = Object.freeze([])
     var DEFAULT_CONFIG = Object.freeze({
+      takeOverNativeAttachments: false,
       capturePaste: true,
       captureDrop: true,
       showPicker: true,
@@ -70,7 +71,10 @@ window.__ModuleLoader__.load({
       'settings.positiveInteger': '请输入正整数。',
       'settings.resetFailed': '设置重置失败。',
       'settings.title': '粘贴到路径',
-      'settings.description': '选择插件拥有的输入入口，并管理路径附件行为。',
+      'settings.summary': '在 DSH Native 与经典 P2P 附件管线之间二选一，并可独立启用长文本转附件。',
+      'settings.description': 'P2P 已完成补齐通用附件的使命。最终版只保留附件管线总开关与长文本转换。',
+      'settings.takeover': '接管 DSH 原生附件系统',
+      'settings.takeoverHint': '开启后，文件、图片、粘贴、拖放、选择器和附件 Dock 全部走经典 P2P；关闭后完全交给 DSH Native。',
       'settings.capturePaste': '接管文件和内容粘贴',
       'settings.capturePasteHint': '关闭后不注册 paste 监听器；文件、Host 路径和长文本粘贴会交给 DSH 或其他插件。',
       'settings.captureDrop': '接管文件拖拽',
@@ -85,7 +89,7 @@ window.__ModuleLoader__.load({
       'settings.windowsClipboard': '本机 Windows Explorer 剪贴板后备',
       'settings.windowsClipboardHint': '仅在直接 localhost 连接中读取 Windows FileDropList；远程连接不会访问 Host 剪贴板。',
       'settings.threshold': '长文本阈值（字符）',
-      'settings.thresholdHint': '达到此长度的文本会保存为 .txt 附件。',
+      'settings.thresholdHint': '粘贴文本达到该字符数时会保存为 .txt 附件；默认 8,000。',
       'settings.maxBytes': '单个附件大小上限（字节）',
       'settings.editableTextMaxBytes': '可编辑文本大小上限（字节）',
       'settings.reset': '恢复 profile 默认值',
@@ -125,7 +129,10 @@ window.__ModuleLoader__.load({
       'settings.positiveInteger': 'Enter a positive integer.',
       'settings.resetFailed': 'The settings could not be reset.',
       'settings.title': 'Paste to Path',
-      'settings.description': 'Choose the input surfaces this plugin owns and manage path-backed attachment behavior.',
+      'settings.summary': 'Choose either DSH Native or the classic P2P attachment pipeline, with optional long-text conversion.',
+      'settings.description': 'P2P has completed its original mission of filling DSH attachment gaps. The final release keeps only attachment ownership and long-text conversion.',
+      'settings.takeover': 'Take over DSH Native attachments',
+      'settings.takeoverHint': 'When enabled, files, images, paste, drop, picker, and the attachment Dock all use classic P2P. When disabled, DSH Native owns them completely.',
       'settings.capturePaste': 'Capture file and content paste',
       'settings.capturePasteHint': 'When off, no paste listener is registered; files, Host paths, and long text are left to DSH or another plugin.',
       'settings.captureDrop': 'Capture file drag and drop',
@@ -140,7 +147,7 @@ window.__ModuleLoader__.load({
       'settings.windowsClipboard': 'Local Windows Explorer clipboard fallback',
       'settings.windowsClipboardHint': 'Reads the Windows FileDropList only over a direct localhost connection; remote clients never access the Host clipboard.',
       'settings.threshold': 'Long-text threshold (characters)',
-      'settings.thresholdHint': 'Text at or above this length is stored as a .txt attachment.',
+      'settings.thresholdHint': 'Pasted text at or above this character count is stored as a .txt attachment; the default is 8,000.',
       'settings.maxBytes': 'Maximum attachment size (bytes)',
       'settings.editableTextMaxBytes': 'Maximum editable text size (bytes)',
       'settings.reset': 'Reset to profile defaults',
@@ -392,20 +399,33 @@ window.__ModuleLoader__.load({
       selection.addRange(range)
     }
 
+    function sessionContext(ctx, sessionId, snapshot = ctx.sessions.list.getSnapshot()) {
+      if (!sessionId) return null
+      var actx = ctx.sessions.scope(sessionId)
+      if (!actx) return null
+      var input = ctx.conversation.input.for(actx)
+      if (!input?.state?.getSnapshot) return null
+      return {
+        sessionId,
+        actx,
+        input,
+        workspace: typeof snapshot.byId?.[sessionId]?.cwd === 'string' ? snapshot.byId[sessionId].cwd : '',
+      }
+    }
+
     function activeSession(ctx) {
       try {
         var snapshot = ctx.sessions.list.getSnapshot()
+        // DSH <= 0.1.2 exposed `current`. DSH 0.1.6 represents the visible
+        // conversation through the main-view retain count instead.
         var sessionId = snapshot.current
-        var actx = sessionId ? ctx.sessions.scope(sessionId) : null
-        if (!sessionId || !actx) return null
-        var input = ctx.conversation.input.for(actx)
-        if (!input?.state?.getSnapshot) return null
-        return {
-          sessionId,
-          actx,
-          input,
-          workspace: typeof snapshot.byId?.[sessionId]?.cwd === 'string' ? snapshot.byId[sessionId].cwd : '',
+        if (!sessionId) {
+          var visible = Object.entries(snapshot.byId || {}).find(
+            ([, summary]) => (summary?.retainedBy?.mainView ?? 0) > 0,
+          )
+          sessionId = visible?.[1]?.id || visible?.[0]
         }
+        return sessionContext(ctx, sessionId, snapshot)
       } catch (error) {
         console.error('[dsh-paste-to-path] cannot resolve active session', error)
         return null
@@ -663,8 +683,8 @@ window.__ModuleLoader__.load({
       }
     }
 
-    function captureInsertion(target) {
-      var active = _ctx && activeSession(_ctx)
+    function captureInsertion(target, sessionId) {
+      var active = _ctx && (sessionId ? sessionContext(_ctx, sessionId) : activeSession(_ctx))
       if (!active) return null
       var snapshot = active.input.state.getSnapshot()
       var span = composerSpan(target, snapshot)
@@ -715,11 +735,41 @@ window.__ModuleLoader__.load({
       return new File([text], `pasted-text-${stamp}.txt`, { type: 'text/plain;charset=utf-8' })
     }
 
+    function consumeNativeLongText(event, text) {
+      var active = activeSession(_ctx)
+      if (!active) return false
+      var file = longTextFile(text)
+      var drafts = []
+      try {
+        drafts = _ctx.conversation.createDrafts(active.sessionId, [file])
+        if (!active.input.addAttachments(drafts.map((draft) => draft.id))) {
+          _ctx.conversation.releaseDraftAttachments(drafts)
+          return false
+        }
+      } catch (error) {
+        if (drafts.length > 0) _ctx.conversation.releaseDraftAttachments(drafts)
+        console.error('[dsh-paste-to-path] native long-text attachment failed', error)
+        return false
+      }
+      event.preventDefault()
+      event.stopImmediatePropagation()
+      active.input.notify('info', tr('attachment.saved', { name: file.name }))
+      return true
+    }
+
     function onPaste(event) {
-      if (!config.capturePaste) return
       var target = composerForTarget(event.target)
       if (!target) return
       var files = filesOfPaste(event)
+      if (!config.takeOverNativeAttachments) {
+        // Native mode owns every browser-provided file and every hidden file
+        // signal. P2P observes only plain text and never competes for the event.
+        if (files.length > 0 || signalsClipboardFiles(event)) return
+        if (!config.longTextAsAttachment) return
+        var nativeText = event.clipboardData?.getData('text/plain') || ''
+        if (nativeText.length >= config.longTextThreshold) consumeNativeLongText(event, nativeText)
+        return
+      }
       var pathPayload = pathsOfPaste(event)
       if (files.length > 0 && (files.some((file) => file.size > 0) || !pathPayload)) {
         consume(event, target, files)
@@ -743,24 +793,41 @@ window.__ModuleLoader__.load({
     }
 
     function onDragEnter(event) {
-      if (!config.captureDrop || !carriesFiles(event) || !currentComposer()) return
+      if (!config.takeOverNativeAttachments || !carriesFiles(event) || !currentComposer()) return
       event.preventDefault()
       event.stopImmediatePropagation()
     }
 
     function onDragOver(event) {
-      if (!config.captureDrop || !carriesFiles(event) || !currentComposer()) return
+      if (!config.takeOverNativeAttachments || !carriesFiles(event) || !currentComposer()) return
       event.preventDefault()
       event.stopImmediatePropagation()
       if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy'
     }
 
     function onDrop(event) {
-      if (!config.captureDrop || !carriesFiles(event)) return
+      if (!config.takeOverNativeAttachments || !carriesFiles(event)) return
       var target = composerForTarget(event.target) || currentComposer()
       if (!target) return
       var files = filesOfDrop(event)
       if (files.length > 0) consume(event, target, files)
+    }
+
+    function onNativeFileInput(event) {
+      if (!config.takeOverNativeAttachments) return
+      var input = event.target
+      if (
+        input?.nodeType !== 1 ||
+        input.tagName !== 'INPUT' ||
+        input.type !== 'file' ||
+        input.classList?.contains('dsh-p2p-picker-input')
+      ) return
+      var card = input.closest?.('[data-composer-card]')
+      var target = card?.querySelector?.(COMPOSER_SELECTOR)
+      if (!isComposer(target)) return
+      var files = Array.from(input.files || []).filter(Boolean)
+      if (files.length === 0) return
+      if (consume(event, target, files)) input.value = ''
     }
 
     function removeReference(sessionId, ref, input) {
@@ -1055,7 +1122,7 @@ window.__ModuleLoader__.load({
         event.target.value = ''
         if (files.length === 0) return
         var target = currentComposer()
-        var insertion = target && captureInsertion(target)
+        var insertion = target && captureInsertion(target, sessionId)
         if (!target || !insertion || insertion.active.sessionId !== sessionId) return
         schedule(sessionId, () => routeFiles(insertion.active, target, insertion.base, files))
       }
@@ -1395,6 +1462,140 @@ window.__ModuleLoader__.load({
       })
     }
 
+    function FinalSettingsFields({ scope, t }) {
+      var snapshot = React.useSyncExternalStore(
+        React.useCallback((listener) => scope.subscribe(listener), [scope]),
+        React.useCallback(() => scope.getSnapshot(), [scope]),
+        React.useCallback(() => scope.getSnapshot(), [scope]),
+      )
+      var settings = snapshot.value
+      var ready = snapshot.status === 'ready' && settings !== undefined
+      var writable = ready && snapshot.writable
+      var [threshold, setThreshold] = React.useState('')
+      var [error, setError] = React.useState('')
+
+      React.useEffect(() => {
+        if (Number.isSafeInteger(settings?.longTextThreshold)) setThreshold(String(settings.longTextThreshold))
+      }, [settings?.longTextThreshold])
+
+      function write(field, value) {
+        setError('')
+        Promise.resolve(scope.set(field, value)).catch((reason) => {
+          console.error('[dsh-paste-to-path] could not save setting', reason)
+          setError(t('settings.saveFailed'))
+        })
+      }
+
+      function writeThreshold() {
+        var value = Number(threshold)
+        if (!Number.isSafeInteger(value) || value < 1) {
+          setError(t('settings.positiveInteger'))
+          return
+        }
+        if (settings?.longTextThreshold === value) return
+        write('longTextThreshold', value)
+      }
+
+      function reset() {
+        setError('')
+        Promise.all([
+          scope.unset('takeOverNativeAttachments'),
+          scope.unset('longTextAsAttachment'),
+          scope.unset('longTextThreshold'),
+        ]).catch((reason) => {
+          console.error('[dsh-paste-to-path] could not reset settings', reason)
+          setError(t('settings.resetFailed'))
+        })
+      }
+
+      if (!ready) return null
+
+      return jsx.jsxs('div', {
+        className: 'dsh-p2p-settings-body',
+        children: [
+          jsx.jsx('p', { className: 'dsh-p2p-settings-description', children: t('settings.description') }),
+          jsx.jsxs('div', {
+            className: 'dsh-p2p-settings-fields',
+            children: [
+              jsx.jsxs('label', {
+                className: 'dsh-p2p-settings-check',
+                children: [
+                  jsx.jsx('input', {
+                    type: 'checkbox',
+                    checked: settings.takeOverNativeAttachments === true,
+                    disabled: !writable,
+                    onChange: (event) => write('takeOverNativeAttachments', event.target.checked),
+                  }),
+                  t('settings.takeover'),
+                ],
+              }),
+              jsx.jsx('span', { className: 'dsh-p2p-settings-hint', children: t('settings.takeoverHint') }),
+              jsx.jsxs('label', {
+                className: 'dsh-p2p-settings-check',
+                children: [
+                  jsx.jsx('input', {
+                    type: 'checkbox',
+                    checked: settings.longTextAsAttachment !== false,
+                    disabled: !writable,
+                    onChange: (event) => write('longTextAsAttachment', event.target.checked),
+                  }),
+                  t('settings.longText'),
+                ],
+              }),
+              jsx.jsxs('label', {
+                className: 'dsh-p2p-settings-field',
+                children: [
+                  t('settings.threshold'),
+                  jsx.jsx('input', {
+                    type: 'number',
+                    min: 1,
+                    step: 1,
+                    value: threshold,
+                    disabled: !writable || settings.longTextAsAttachment === false,
+                    onChange: (event) => setThreshold(event.target.value),
+                    onBlur: writeThreshold,
+                    onKeyDown: (event) => {
+                      if (event.key === 'Enter') event.currentTarget.blur()
+                    },
+                  }),
+                  jsx.jsx('span', { className: 'dsh-p2p-settings-hint', children: t('settings.thresholdHint') }),
+                ],
+              }),
+            ],
+          }),
+          jsx.jsxs('div', {
+            className: 'dsh-p2p-settings-actions',
+            children: [
+              jsx.jsx('button', {
+                type: 'button',
+                className: 'dsh-p2p-button',
+                disabled: !writable,
+                onClick: reset,
+                children: t('settings.reset'),
+              }),
+              !writable && jsx.jsx('span', { className: 'dsh-p2p-settings-status', children: t('settings.readOnly') }),
+              error && jsx.jsx('span', { className: 'dsh-p2p-error', children: error }),
+            ],
+          }),
+        ],
+      })
+    }
+
+    function FinalLegacySettingsCard({ scope, t }) {
+      return jsx.jsxs('li', {
+        className: 'dsh-p2p-settings-card dsh-p2p-settings-card-open',
+        children: [
+          jsx.jsx('div', { className: 'dsh-p2p-settings-title', children: t('settings.title') }),
+          jsx.jsx(FinalSettingsFields, { scope, t }),
+        ],
+      })
+    }
+
+    function FinalPluginManagerSettings({ scope, t, view }) {
+      if (view === 'summary') return jsx.jsx('span', { children: t('settings.summary') })
+      return jsx.jsx(FinalSettingsFields, { scope, t })
+    }
+
     function acceptConfig(value) {
       if (!value || typeof value !== 'object' || Array.isArray(value)) return
       config = { ...config, ...value }
@@ -1431,7 +1632,18 @@ window.__ModuleLoader__.load({
             locale: LOCALE_NS,
             inject: () => ({ scope: configScope }),
           },
-          PasteToPathSettingsCard,
+          FinalLegacySettingsCard,
+        ),
+      )
+      var disposePluginSettingsSlot = ctx.slots.inject('plugins.row.config', () =>
+        ctx.slots.register(
+          {
+            name: 'plugins.row.config',
+            key: 'dsh-paste-to-path#paste-to-path',
+            locale: LOCALE_NS,
+            inject: () => ({ scope: configScope }),
+          },
+          FinalPluginManagerSettings,
         ),
       )
       var disposeSource = ctx.inputTriggers.registerSource({
@@ -1476,7 +1688,7 @@ window.__ModuleLoader__.load({
 
       var disposeDockSlot = injectOptionalSlot(
         'conversation.input.dock',
-        () => config.showDock,
+        () => config.takeOverNativeAttachments,
         {
           name: 'conversation.input.dock',
           id: 'paste-to-path-attachments',
@@ -1488,7 +1700,7 @@ window.__ModuleLoader__.load({
       )
       var disposePickerSlot = injectOptionalSlot(
         'conversation.input.left',
-        () => config.showPicker,
+        () => config.takeOverNativeAttachments,
         {
           name: 'conversation.input.left',
           id: 'paste-to-path-picker',
@@ -1501,24 +1713,33 @@ window.__ModuleLoader__.load({
 
       var pasteListening = false
       var dropListening = false
+      var nativePickerListening = false
       var synchronizeDocumentListeners = () => {
-        if (config.capturePaste && !pasteListening) {
+        var shouldListenForPaste = config.takeOverNativeAttachments || config.longTextAsAttachment
+        if (shouldListenForPaste && !pasteListening) {
           document.addEventListener('paste', onPaste, true)
           pasteListening = true
-        } else if (!config.capturePaste && pasteListening) {
+        } else if (!shouldListenForPaste && pasteListening) {
           document.removeEventListener('paste', onPaste, true)
           pasteListening = false
         }
-        if (config.captureDrop && !dropListening) {
+        if (config.takeOverNativeAttachments && !dropListening) {
           document.addEventListener('dragenter', onDragEnter, true)
           document.addEventListener('dragover', onDragOver, true)
           document.addEventListener('drop', onDrop, true)
           dropListening = true
-        } else if (!config.captureDrop && dropListening) {
+        } else if (!config.takeOverNativeAttachments && dropListening) {
           document.removeEventListener('dragenter', onDragEnter, true)
           document.removeEventListener('dragover', onDragOver, true)
           document.removeEventListener('drop', onDrop, true)
           dropListening = false
+        }
+        if (config.takeOverNativeAttachments && !nativePickerListening) {
+          document.addEventListener('change', onNativeFileInput, true)
+          nativePickerListening = true
+        } else if (!config.takeOverNativeAttachments && nativePickerListening) {
+          document.removeEventListener('change', onNativeFileInput, true)
+          nativePickerListening = false
         }
       }
       featureSynchronizers.add(synchronizeDocumentListeners)
@@ -1532,8 +1753,10 @@ window.__ModuleLoader__.load({
             document.removeEventListener('dragenter', onDragEnter, true)
             document.removeEventListener('dragover', onDragOver, true)
             document.removeEventListener('drop', onDrop, true)
+            document.removeEventListener('change', onNativeFileInput, true)
             disposePickerSlot()
             disposeDockSlot()
+            disposePluginSettingsSlot()
             disposeSettingsSlot()
             disposeConfig()
             disposeSource()

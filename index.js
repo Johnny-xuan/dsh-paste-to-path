@@ -15,6 +15,7 @@ export const name = 'dsh-paste-to-path'
 export const inject = ['webServer', 'settings', 'connection']
 
 const DEFAULTS = Object.freeze({
+  takeOverNativeAttachments: false,
   capturePaste: true,
   captureDrop: true,
   showPicker: true,
@@ -28,6 +29,7 @@ const DEFAULTS = Object.freeze({
 })
 
 export const Config = z.object({
+  takeOverNativeAttachments: z.boolean().default(DEFAULTS.takeOverNativeAttachments),
   capturePaste: z.boolean().default(DEFAULTS.capturePaste),
   captureDrop: z.boolean().default(DEFAULTS.captureDrop),
   showPicker: z.boolean().default(DEFAULTS.showPicker),
@@ -74,11 +76,15 @@ function positiveInteger(value, fallback) {
 }
 
 export function resolveConfig(config = {}) {
+  const takeOverNativeAttachments = config.takeOverNativeAttachments === true
   const resolved = {
-    capturePaste: config.capturePaste !== false,
-    captureDrop: config.captureDrop !== false,
-    showPicker: config.showPicker !== false,
-    showDock: config.showDock !== false,
+    takeOverNativeAttachments,
+    // The final takeover is all-or-nothing. Historical granular settings may
+    // remain on disk, but they cannot silently weaken the master switch.
+    capturePaste: takeOverNativeAttachments || config.capturePaste !== false,
+    captureDrop: takeOverNativeAttachments || config.captureDrop !== false,
+    showPicker: takeOverNativeAttachments || config.showPicker !== false,
+    showDock: takeOverNativeAttachments || config.showDock !== false,
     longTextAsAttachment: config.longTextAsAttachment !== false,
     longTextThreshold: positiveInteger(config.longTextThreshold, DEFAULTS.longTextThreshold),
     maxBytes: positiveInteger(config.maxBytes, DEFAULTS.maxBytes),
@@ -352,6 +358,7 @@ export function apply(ctx, rawConfig = {}) {
       handler: async (req, res) => {
         if (req.method !== 'GET') return json(res, 405, { error: 'method not allowed' }, { allow: 'GET' })
         return json(res, 200, {
+          takeOverNativeAttachments: config.takeOverNativeAttachments,
           capturePaste: config.capturePaste,
           captureDrop: config.captureDrop,
           showPicker: config.showPicker,
