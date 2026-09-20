@@ -1,79 +1,280 @@
 # dsh-paste-to-path
 
-> **Final release: choose DSH Native or classic P2P attachments.**
+> **A universal attachment dock for DSH.**
 
-English | [简体中文](./docs/README.zh.md)
+English | [简体中文](https://github.com/Johnny-xuan/dsh-paste-to-path/blob/main/docs/README.zh.md)
 
-`dsh-paste-to-path` originally gave DeepSeek Harness a universal attachment Dock when the Web composer accepted only a small image whitelist. DSH `0.1.5+` now ships its own generic-file pipeline with background upload, persistence, one attachment rail, model-readable paths, and Sidebar previews.
+> [!IMPORTANT]
+> **Final release — v0.0.7**
+>
+> DSH now provides an official generic-file attachment pipeline, so the compatibility gap this plugin was created to fill has been closed. Version `0.0.7` is the final release; no further versions are planned.
+>
+> DSH Native owns ordinary files and images by default. Enable **Take over DSH Native attachments** only when you explicitly want the classic path-backed P2P workflow. Long-text conversion remains independently available.
 
-That closes the gap this plugin was created to fill. Version `0.0.7` is the final compatibility release.
+The rest of this README documents the classic P2P workflow available when takeover is enabled.
 
-It keeps exactly two user-facing choices:
+`dsh-paste-to-path` adds a general-purpose attachment Dock to the DSH Web composer.
 
-1. **Take over DSH Native attachments** — restore the complete classic P2P path-backed workflow.
-2. **Long text as attachment** — turn a very long plain-text paste into a `.txt` attachment.
+Paste, drop, or choose images, PDFs, Word and Excel documents, archives, code, logs, and other files, then review and manage them together before sending.
 
-The default is deliberately modern:
+<p align="center">
+  <img src="https://raw.githubusercontent.com/Johnny-xuan/dsh-paste-to-path/main/assets/demo.png" alt="dsh-paste-to-path attachment dock" width="100%">
+</p>
 
-```text
-Take over DSH Native attachments: off
-Long text as attachment:          on
-```
+<p align="center"><em>Images, PDFs, archives, and other formats share one attachment Dock.</em></p>
 
-Files and images therefore use DSH Native by default. P2P does not register its picker or Dock and does not consume file paste or drop events.
+The DSH `0.1.2-rc.1` Web composer has a native image attachment path, but PDFs, Office documents, archives, and other formats do not have the same model-independent entry point. Even an image may fail when the selected model does not support image input or the active adapter is text-only.
 
-## The two modes
-
-| Takeover | Ordinary files and images | Long pasted text |
-| --- | --- | --- |
-| Off (default) | DSH Native owns picker, paste, drop, upload, cards, persistence, and model paths | Converted to a `.txt` file and admitted through the DSH Native attachment pipeline |
-| On | Classic P2P owns picker, paste, drop, path Dock, Host storage, and path references | Converted through the classic P2P path-backed pipeline |
-
-This is exclusive ownership, not two competing attachment systems. When takeover is off, browser-provided files are left completely untouched for DSH. When takeover is on, classic P2P owns the entire attachment interaction.
-
-## Why the project is retiring
-
-The original design separated two concerns:
+`dsh-paste-to-path` does not extend the model's native content types. It takes a simpler route:
 
 ```text
-getting a file into the conversation
-                    ≠
-understanding the file's contents
+File
+  ↓
+DSH Host
+  ↓
+Local path
+  ↓
+Agent
+  ↓
+Your own tools
 ```
 
-P2P saved a file on the DSH Host, inserted a path reference, and let the Agent choose an available image, document, archive, or filesystem tool. It did not wrap model capabilities or bind users to one vision stack.
+Send images to your own vision tool, PDFs to a document reader, and archives to shell or extraction tools.
 
-DSH now follows the same core model for generic files, with a stronger durable implementation. Maintaining a second default attachment system would create duplicate UI, competing paste/drop handlers, and weaker lifecycle behavior. The correct final state is therefore Native by default, with classic P2P available only by explicit choice.
+The plugin owns **attachment intake, management, and path delivery**. Your Agent tool stack decides how to read the file.
+
+---
+
+## Path flow at a glance
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/Johnny-xuan/dsh-paste-to-path/main/assets/dsh-paste-to-path-poster-4k.png" alt="How dsh-paste-to-path works" width="100%">
+</p>
+
+<p align="center"><em>The file is saved on the DSH Host, then its path is given to the Agent.</em></p>
+
+---
+
+## What it does
+
+### Universal attachment Dock
+
+Paste, drop, or choose a file and an attachment card appears above the composer. The plugin's paperclip button accepts any file type and routes it through this Dock rather than DSH's native image rail.
+
+Each card shows the file name, size, category, and path. You can remove it before sending.
+
+Images also have thumbnails and lightbox previews.
+
+---
+
+### File-manager clipboard support
+
+The plugin catches every real `File` object exposed by the browser, including empty files. It can also turn a pasted `file:` URI or absolute path into a card when that path already exists on the DSH Host.
+
+Path conversion is transactional: every candidate path must exist on the DSH Host. If any candidate is unavailable, the original clipboard text is pasted normally without an attachment error or a partial conversion.
+
+Browsers do not consistently expose non-image files copied from Windows Explorer, Finder, or Linux file managers. If the paste event contains neither file bytes nor a usable Host path, an ordinary web page cannot reconstruct the hidden OS clipboard entry. To address [Issue #2](https://github.com/Johnny-xuan/dsh-paste-to-path/issues/2), the plugin reads Explorer's `FileDropList` at this point when DSH runs on a local Windows Host through a direct `localhost` connection; remote clients never access the Host clipboard. In other cases, use the plugin's paperclip button or drag and drop. A path from a remote browser's device is not a path on the DSH Host.
+
+---
+
+### One flow for many file types
+
+Images, PDFs, Office documents, code, logs, archives, and other binary files all use the same attachment flow:
+
+```text
+File → Save on Host → Path reference → Agent
+```
+
+You do not need a separate model-input protocol for every file type.
+
+---
+
+### Turn long pasted text into an attachment
+
+Normal text still pastes normally.
+
+When pasted content crosses the configured threshold, the plugin can save it as a `.txt` file instead of putting tens of thousands of characters directly into the composer.
+
+The default threshold is `8000` characters.
+
+---
+
+### Edit text files before sending
+
+Text and code attachments can be edited directly in the Dock when they are below the configured size limit.
+
+The default limit is 1 MiB.
+
+---
+
+### Open files with the system application
+
+For a local DSH deployment, the authenticated `session.openWorkspacePath` Remote API can open an attachment with the system's default application.
+
+---
 
 ## Installation
+
+Install into a DSH Web profile:
 
 ```bash
 dsh plugin --profile web add dsh-paste-to-path
 ```
 
-Then restart DSH:
+You can also install the current GitHub branch directly:
+
+```bash
+dsh plugin --profile web add github:Johnny-xuan/dsh-paste-to-path
+```
+
+Restart DSH after installation:
 
 ```bash
 dsh web
 ```
 
-This final release targets:
+The package includes a `dsh.bundle` manifest, so the required loader patch is loaded with the plugin.
+
+---
+
+## How it works
+
+When you paste, drop, or choose a file, the plugin catches it and saves a private copy on the DSH Host:
 
 ```text
-DeepSeek Harness >= 0.1.5-rc.1 and < 0.2.0
+<workspace>/.dsh/pastes/<category>/
 ```
 
-Users maintaining pre-native-attachment DSH installations should pin the historical release:
+The composer does not contain the file's contents. It keeps an attachment reference instead.
 
-```bash
-dsh plugin --profile web add dsh-paste-to-path@0.0.6
+If you paste an absolute path that already exists on the DSH Host, the plugin links that existing file instead of copying it. Linked files are never editable from the Dock.
+
+When you send the message, DSH's reference codec expands that reference into a short path instruction:
+
+```text
+Paste / drop file
+        │
+        ▼
+Save on DSH Host
+        │
+        ▼
+Attachment Dock
+shows the file card
+        │
+        ▼
+Send message
+        │
+        ▼
+reference codec
+creates a path instruction
+        │
+        ▼
+Agent receives the path
+        │
+        ▼
+Uses an available tool to read it
 ```
+
+The implementation uses DSH's extension mechanisms:
+
+- `conversation.input.dock`
+- `conversation.input.left`
+- input-trigger reference codec
+- `settingsScope`
+
+No DSH core modification is required.
+
+---
+
+## What the Agent receives
+
+The plugin does not put file bytes in the initial model request.
+
+For example, a PDF expands to:
+
+```text
+Document attachment: /absolute/path/to/report.pdf
+Read it using an appropriate tool for this file format.
+```
+
+An image expands similarly:
+
+```text
+Image attachment: /absolute/path/to/image.png
+Inspect it using an available image-reading method.
+```
+
+Text, code, archives, and other formats receive equivalent path instructions.
+
+The instructions do not require a particular tool. The Agent decides what to do next from the tools that are actually available in the current session.
+
+---
+
+## Bring your own tools
+
+`dsh-paste-to-path` does not parse file contents.
+
+Connect whichever tools fit your Agent environment, for example:
+
+- images → your own `read_image` or vision tool
+- PDF / Word / Excel → document readers
+- scans → OCR
+- code / logs → shell or filesystem tools
+- ZIP / TAR → archive extractors
+
+The plugin does not install these tools or assume that the current model has their capabilities.
+
+Any compatible tool that can access the file path on the DSH Host can read the stored attachment.
+
+If the Agent has no suitable tool, the file still enters the Dock and is saved on the Host, but the Agent cannot understand its contents.
+
+---
+
+## Why paths
+
+In DSH's native attachment path, supported file formats and model capabilities are closely related.
+
+In DSH `0.1.2-rc.1`, the native Web image intake accepts:
+
+- PNG
+- JPEG
+- WebP
+- GIF
+
+Other MIME types do not enter the same native image path.
+
+An image that passes the format check may still fail if it reaches a model without image input or a text-only adapter.
+
+`dsh-paste-to-path` separates two concerns:
+
+```text
+Give the file to the Agent
+```
+
+and:
+
+```text
+Understand the file's contents
+```
+
+The plugin handles only the first.
+
+The file becomes an ordinary file on the Host. The Agent's tool layer handles the second.
+
+---
 
 ## Configuration
 
-On DSH `0.1.6+`, open the plugin's installed-bundle page and configure the `paste-to-path` row. On DSH `0.1.5`, the same controls remain available through the older configurable-plugin settings surface.
+Version `0.0.7` exposes two primary choices:
 
-The profile defaults are:
+| Option | Default | Description |
+| --- | --- | --- |
+| **Take over DSH Native attachments** | Off | When enabled, files, images, paste, drop, the picker, and the attachment Dock all use classic P2P. When disabled, ordinary attachments stay entirely with DSH Native. |
+| **Turn long pasted text into an attachment** | On | Converts qualifying plain-text pastes into `.txt` attachments. This works with either attachment owner. |
+
+The long-text character threshold is a subordinate setting of the second option. It defaults to `8000` and remains editable from the plugin settings page.
+
+The corresponding profile defaults are:
 
 ```yaml
 - insert:
@@ -85,59 +286,100 @@ The profile defaults are:
         longTextThreshold: 8000
 ```
 
-The settings UI keeps the two primary choices and nests `longTextThreshold` under long-text conversion. It defaults to `8000` JavaScript characters and can be changed directly from the plugin settings page or in the profile configuration.
+With takeover off, P2P does not register its file picker or Dock and does not consume ordinary file paste or drop events. With takeover on, the complete classic workflow described in this README becomes active.
 
-## Native mode
+The settings UI follows DSH's **Language** preference and includes English and Simplified Chinese. Path instructions sent to the Agent remain stable English protocol text.
 
-With takeover off, P2P does not handle:
+---
 
-- ordinary file or image paste;
-- drag and drop;
-- file selection;
-- attachment cards or previews;
-- file upload, retry, persistence, or model-facing paths.
+## File storage
 
-All of those remain native DSH responsibilities.
-
-For a qualifying long text paste, the plugin creates a browser `File` and admits it through DSH's public Conversation attachment state machine. DSH then owns its upload, card, retry, durable storage, and read-only model path.
-
-If native admission cannot start, the plugin does not prevent the paste, so the original text remains available to the composer.
-
-## Classic P2P takeover
-
-Enabling takeover restores the historical workflow:
+With a workspace, attachments are stored under:
 
 ```text
-paste / drop / choose
-          ↓
-save on DSH Host
-          ↓
-P2P attachment Dock + reference chip
-          ↓
-send a short English path instruction
-          ↓
-Agent chooses an available tool
+<workspace>/.dsh/pastes/<category>/
 ```
 
-This mode still supports arbitrary files, image thumbnails, text editing within the configured size limit, Host-path linking, and the localhost-only Windows Explorer clipboard fallback introduced for [Issue #2](https://github.com/Johnny-xuan/dsh-paste-to-path/issues/2).
+Without a workspace, storage falls back to:
 
-Classic mode is retained for preference and compatibility, not recommended over DSH Native for new installations.
+```text
+$DSH_HOME/tmp-paste/<category>/
+```
 
-## Security and privacy
+Files copied into plugin storage use permissions:
 
-In Native mode, attachment storage and transport are entirely owned by DSH.
+```text
+0600
+```
 
-In classic takeover mode:
+An existing Host path pasted as an attachment is linked in place. The plugin does not copy it, change its permissions, or allow Dock editing of the original file.
 
-- uploaded files stay on the user's DSH Host;
-- plugin routes require the authenticated DSH Web connection;
-- stored copies use private file permissions where the platform supports them;
-- remote clients cannot read the Windows Host clipboard;
-- the first model request contains a path instruction, not the file bytes;
-- later tool behavior is governed by the user's own Agent tool stack.
+Removing an attachment from the Dock removes only its reference from the current draft. It does not delete the file from disk.
 
-## Project status
+The path therefore remains valid for undo, re-send, or later reference.
 
-`0.0.7` is the final release of `dsh-paste-to-path`. The repository and historical packages remain available, but no further releases are planned: the project will not compete with or reimplement future DSH attachment architecture.
+---
 
-The workaround became optional because the platform fixed the underlying problem. That is the best possible ending for this plugin.
+## Privacy
+
+Files chosen, dropped, or exposed as browser `File` objects are uploaded to your own DSH Host and saved on its local filesystem. Existing Host paths are only linked in place.
+
+In classic takeover mode, every plugin HTTP route uses DSH's browser authentication and Host/Origin trust checks. Attachment records are isolated by session, and route registrations are removed with the plugin's Cordis lifecycle.
+
+The plugin itself does not:
+
+- upload files directly to a model provider
+- upload files to a third-party file service
+- parse file contents during upload
+
+The initial model request contains only the file path and a short instruction.
+
+If the Agent later uses another tool or external service to process the file, that tool's own behavior and configuration apply.
+
+---
+
+## Design boundary
+
+`dsh-paste-to-path` owns only this part:
+
+```text
+File
+  ↓
+Attachment Dock
+  ↓
+Host filesystem
+  ↓
+Path reference
+```
+
+This part:
+
+```text
+Path
+  ↓
+Vision / PDF Reader / OCR / Shell / ...
+```
+
+belongs to the Agent's tool layer.
+
+The plugin therefore does not:
+
+- modify or replace a model adapter
+- pretend that the model supports vision
+- bind the workflow to a fixed vision, OCR, or document tool
+- parse attachment contents during transport
+- create a native DSH `image` content block
+
+---
+
+## Compatibility
+
+The final release, `0.0.7`, targets:
+
+```text
+DeepSeek Harness >= 0.1.5-rc.1 and < 0.2.0
+```
+
+It has been tested with DSH `0.1.6-alpha.2`. Users maintaining older DSH installations without official generic-file attachments can pin `dsh-paste-to-path@0.0.6`.
+
+No further plugin releases are planned because DSH now owns and maintains the attachment architecture this project originally supplied.
